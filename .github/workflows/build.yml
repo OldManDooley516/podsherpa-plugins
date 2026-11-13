@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: macOS, os: macos-14 }
+          - { name: macOS, os: macos-latest }
           - { name: Windows, os: windows-latest }
     steps:
       - uses: actions/checkout@v4
