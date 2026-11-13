@@ -1,0 +1,17 @@
+PodSherpa plugins (Southern Digital) - test build
+
+These are early test builds: plain interface, first-draft sound. Three plugins:
+PodSherpa Basecamp (the master rack), PodSherpa Summit, PodSherpa Dropoff.
+
+macOS
+  1. Copy everything in VST3 to   ~/Library/Audio/Plug-Ins/VST3
+  2. Copy everything in AU to     ~/Library/Audio/Plug-Ins/Components
+  3. These builds are not signed with an Apple Developer ID yet, so macOS blocks them
+     until you clear the download flag. Open Terminal and run:
+       xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/PodSherpa*.vst3
+       xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/Components/PodSherpa*.component
+  4. Restart your DAW and rescan plugins.
+
+Windows
+  1. Copy everything in VST3 to   C:\Program Files\Common Files\VST3
+  2. Restart your DAW and rescan plugins.

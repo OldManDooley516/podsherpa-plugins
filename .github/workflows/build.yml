@@ -1,0 +1,63 @@
+name: Build plugins
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS, os: macos-14 }
+          - { name: Windows, os: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cmake -B build -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+          else
+            cmake -B build
+          fi
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Run tests
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ./build/ps_tests_artefacts/Release/ps_tests
+          else
+            ./build/ps_tests_artefacts/Release/ps_tests.exe
+          fi
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist/VST3
+          cp -R build/*_artefacts/Release/VST3/*.vst3 dist/VST3/
+          cp INSTALL.txt dist/
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            mkdir -p dist/AU
+            cp -R build/*_artefacts/Release/AU/*.component dist/AU/
+            find dist -name "*.vst3" -maxdepth 2 -exec codesign --force --deep --sign - {} \;
+            find dist -name "*.component" -maxdepth 2 -exec codesign --force --deep --sign - {} \;
+            ditto -c -k --keepParent dist PodSherpa-macOS.zip
+          else
+            7z a PodSherpa-Windows.zip ./dist/*
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PodSherpa-${{ matrix.name }}
+          path: PodSherpa-*.zip
