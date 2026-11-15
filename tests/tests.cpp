@@ -74,7 +74,7 @@ static void dump (const juce::File& dir)
 }
 static void snapshot (juce::AudioProcessor& p, const juce::File& f)
 {
-    std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
+    std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditorIfNeeded());
     auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
     juce::FileOutputStream os (f); os.setPosition (0); os.truncate();
     juce::PNGImageFormat().writeImageToStream (img, os);
