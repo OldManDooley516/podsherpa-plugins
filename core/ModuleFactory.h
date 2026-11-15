@@ -2,6 +2,7 @@
 #include "../modules/Altitude.h"
 #include "../modules/Dropoff.h"
 #include "../modules/Ridgeline.h"
+#include "../modules/Scree.h"
 #include "../modules/Summit.h"
 #include "../modules/Traverse.h"
 #include <functional>
@@ -17,6 +18,7 @@ inline const std::vector<ModuleInfo>& moduleRegistry()
         { "altitude", "Altitude", [] { return std::unique_ptr<Module> (new Altitude()); } },
         { "dropoff", "Dropoff", [] { return std::unique_ptr<Module> (new Dropoff()); } },
         { "ridgeline", "Ridgeline", [] { return std::unique_ptr<Module> (new Ridgeline()); } },
+        { "scree", "Scree", [] { return std::unique_ptr<Module> (new Scree()); } },
         { "summit",  "Summit",  [] { return std::unique_ptr<Module> (new Summit()); } },
         { "traverse", "Traverse", [] { return std::unique_ptr<Module> (new Traverse()); } },
     };
