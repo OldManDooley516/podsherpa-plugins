@@ -1,6 +1,9 @@
 #pragma once
+#include "../modules/Altitude.h"
 #include "../modules/Dropoff.h"
+#include "../modules/Ridgeline.h"
 #include "../modules/Summit.h"
+#include "../modules/Traverse.h"
 #include <functional>
 
 namespace ps
@@ -11,8 +14,11 @@ struct ModuleInfo { juce::String id, name; std::function<std::unique_ptr<Module>
 inline const std::vector<ModuleInfo>& moduleRegistry()
 {
     static const std::vector<ModuleInfo> r = {
+        { "altitude", "Altitude", [] { return std::unique_ptr<Module> (new Altitude()); } },
         { "dropoff", "Dropoff", [] { return std::unique_ptr<Module> (new Dropoff()); } },
+        { "ridgeline", "Ridgeline", [] { return std::unique_ptr<Module> (new Ridgeline()); } },
         { "summit",  "Summit",  [] { return std::unique_ptr<Module> (new Summit()); } },
+        { "traverse", "Traverse", [] { return std::unique_ptr<Module> (new Traverse()); } },
     };
     return r;
 }

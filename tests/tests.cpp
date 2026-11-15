@@ -128,6 +128,21 @@ int main (int argc, char** argv)
         check (std::abs (midDb) < 0.1f, "1 kHz passes unchanged (" + juce::String (midDb, 2) + " dB)");
     }
 
+    std::cout << "Every module" << std::endl;
+    for (auto& info : moduleRegistry())
+    {
+        auto m = info.create(); m->prepare (sr, block, 2);
+        auto b = sine (sr, 48000, 220.0, 0.5f); auto hi = sine (sr, 48000, 3100.0, 0.2f);
+        for (int c = 0; c < 2; ++c) for (int i = 0; i < 48000; ++i)
+            b.setSample (c, i, (b.getSample (c, i) + hi.getSample (c, i)) * (((i / 6000) % 2) ? 1.0f : 0.1f));
+        runBlocks (b, block, [&] (auto& v) { m->process (v); });
+        bool finite = true; for (int i = 0; i < 48000; ++i) if (! std::isfinite (b.getSample (0, i)) || ! std::isfinite (b.getSample (1, i))) finite = false;
+        const float pk = b.getMagnitude (0, 24000, 24000);
+        check (finite && pk > 0.01f && pk < 4.0f, info.name + ": runs at default settings (peak " + juce::String (gainToDb (pk), 1) + " dB, "
+               + juce::String (m->getNumParams()) + " parameters, latency " + juce::String (m->getLatencySamples()) + ")");
+        check (m->getNumParams() <= 50, info.name + ": fits a Basecamp slot (50 parameters)");
+    }
+
     std::cout << "Slot bypass" << std::endl;
     {
         ModuleSlot slot; slot.setModule (std::make_unique<Summit>()); slot.prepare (sr, block, 2);
@@ -179,7 +194,7 @@ int main (int argc, char** argv)
 
         // state round trip, plus an unknown module
         auto tree = p.saveRack();
-        juce::ValueTree ghost ("SLOT"); ghost.setProperty ("index", 5, nullptr); ghost.setProperty ("module", "altitude", nullptr);
+        juce::ValueTree ghost ("SLOT"); ghost.setProperty ("index", 5, nullptr); ghost.setProperty ("module", "notbuiltyet", nullptr);
         ghost.setProperty ("moduleVersion", 3, nullptr);
         juce::ValueTree gp ("PARAM"); gp.setProperty ("id", "target", nullptr); gp.setProperty ("value", -18.0f, nullptr); ghost.appendChild (gp, nullptr);
         tree.appendChild (ghost, nullptr);
@@ -189,9 +204,9 @@ int main (int argc, char** argv)
         q.setStateInformation (mb.getData(), (int) mb.getSize());
         check (q.getSlotModuleId (0) == "summit" && q.getSlotModuleId (1) == "summit" && q.getSlotModuleId (2) == "dropoff", "saved chain reloads in the same order");
         check (std::abs (q.getSlotParams (0)[0]->getReal() + 2.0f) < 0.01f && std::abs (q.getSlotParams (1)[0]->getReal() + 10.0f) < 0.01f, "saved settings reload");
-        check (q.isSlotPlaceholder (5) && q.getSlotName (5) == "Missing: altitude", "unknown module loads as a placeholder");
+        check (q.isSlotPlaceholder (5) && q.getSlotName (5) == "Missing: notbuiltyet", "unknown module loads as a placeholder");
         auto again = q.saveRack().getChildWithProperty ("index", 5);
-        check (again.getProperty ("module").toString() == "altitude" && (float) again.getChildWithProperty ("id", "target").getProperty ("value") == -18.0f,
+        check (again.getProperty ("module").toString() == "notbuiltyet" && (float) again.getChildWithProperty ("id", "target").getProperty ("value") == -18.0f,
                "placeholder keeps the unknown module's data when saved again");
         auto probe = sine (sr, 4800, 440.0, 0.2f);
         runBlocks (probe, block, [&] (auto& v) { q.processBlock (v, midi); });

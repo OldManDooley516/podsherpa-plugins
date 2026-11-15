@@ -43,7 +43,10 @@ function(ps_plugin target name code category)
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags)
 endfunction()
 
+ps_plugin(Altitude  "PodSherpa Altitude"  PsAl Dynamics plugins/Altitude/Plugin.cpp)
+ps_plugin(Ridgeline "PodSherpa Ridgeline" PsRl Dynamics plugins/Ridgeline/Plugin.cpp)
 ps_plugin(Summit   "PodSherpa Summit"   PsSm Dynamics plugins/Summit/Plugin.cpp)
+ps_plugin(Traverse  "PodSherpa Traverse"  PsTv Dynamics plugins/Traverse/Plugin.cpp)
 ps_plugin(Dropoff  "PodSherpa Dropoff"  PsDo Filter   plugins/Dropoff/Plugin.cpp)
 ps_plugin(Basecamp "PodSherpa Basecamp" PsBc Mastering
     plugins/Basecamp/BasecampProcessor.cpp plugins/Basecamp/BasecampEditor.cpp)
@@ -54,5 +57,10 @@ target_sources(ps_tests PRIVATE tests/tests.cpp
     plugins/Basecamp/BasecampProcessor.cpp plugins/Basecamp/BasecampEditor.cpp)
 target_compile_definitions(ps_tests PRIVATE ${PS_DEFS})
 target_link_libraries(ps_tests PRIVATE juce::juce_audio_processors juce::juce_gui_basics juce::juce_recommended_config_flags)
+# Runs one module over a raw audio file, for checking a port against the original JSFX
+juce_add_console_app(ps_ref PRODUCT_NAME "ps_ref")
+target_sources(ps_ref PRIVATE tests/ref.cpp)
+target_compile_definitions(ps_ref PRIVATE ${PS_DEFS})
+target_link_libraries(ps_ref PRIVATE juce::juce_audio_basics juce::juce_data_structures juce::juce_recommended_config_flags)
 enable_testing()
 add_test(NAME ps_tests COMMAND ps_tests)
