@@ -48,6 +48,7 @@ ps_plugin(Ridgeline "PodSherpa Ridgeline" PsRl Dynamics plugins/Ridgeline/Plugin
 ps_plugin(Scree     "PodSherpa Scree"     PsSc Restoration plugins/Scree/Plugin.cpp)
 ps_plugin(Summit   "PodSherpa Summit"   PsSm Dynamics plugins/Summit/Plugin.cpp)
 ps_plugin(Traverse  "PodSherpa Traverse"  PsTv Dynamics plugins/Traverse/Plugin.cpp)
+ps_plugin(Contour   "PodSherpa Contour"   PsCt EQ plugins/Contour/Plugin.cpp)
 ps_plugin(Dropoff  "PodSherpa Dropoff"  PsDo Filter   plugins/Dropoff/Plugin.cpp)
 ps_plugin(Basecamp "PodSherpa Basecamp" PsBc Mastering
     plugins/Basecamp/BasecampProcessor.cpp plugins/Basecamp/BasecampEditor.cpp)

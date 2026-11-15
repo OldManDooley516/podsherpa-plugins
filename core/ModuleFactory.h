@@ -1,5 +1,6 @@
 #pragma once
 #include "../modules/Altitude.h"
+#include "../modules/Contour.h"
 #include "../modules/Dropoff.h"
 #include "../modules/Ridgeline.h"
 #include "../modules/Scree.h"
@@ -16,6 +17,7 @@ inline const std::vector<ModuleInfo>& moduleRegistry()
 {
     static const std::vector<ModuleInfo> r = {
         { "altitude", "Altitude", [] { return std::unique_ptr<Module> (new Altitude()); } },
+        { "contour", "Contour", [] { return std::unique_ptr<Module> (new Contour()); } },
         { "dropoff", "Dropoff", [] { return std::unique_ptr<Module> (new Dropoff()); } },
         { "ridgeline", "Ridgeline", [] { return std::unique_ptr<Module> (new Ridgeline()); } },
         { "scree", "Scree", [] { return std::unique_ptr<Module> (new Scree()); } },
