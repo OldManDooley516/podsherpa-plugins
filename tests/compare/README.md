@@ -13,4 +13,6 @@ Results on Nov 15, 2026 against the JSFX 0.4.1 plugins, 48 kHz, 512-sample block
 and dense multi-tone test files, several settings each: Traverse, Ridgeline, Altitude, Scree,
 Contour (Natural and Linear), Contour Dynamic (Natural and Linear) and Clearing (Auto) all match
 to within one step of 32-bit float output (differences 150 dB or more below the signal).
-Not compared: Clearing's Learned mode, sample rates other than 48 kHz, mono.
+Dropoff was compared the same way after its 0.4.1 update: all six slopes, Linear mode, and
+Listen in both phase modes (against a copy of the JSFX with Listen switched on in its code).
+Not compared: Summit (checked earlier against a Python transcription only), Clearing's Learned mode, sample rates other than 48 kHz, mono.
