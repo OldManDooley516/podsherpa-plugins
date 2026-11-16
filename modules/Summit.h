@@ -8,9 +8,9 @@ namespace ps
     Peaks at the threshold are scaled to the ceiling; a 3 ms look-ahead moving average of the
     gain guarantees the ceiling without a hard clipper.
 
-    Not carried over yet: the loudness target selector and LUFS meter (display only), the
-    factory presets, and the JSFX rule that caps output gain at minus the ceiling. Input and
-    output gain and the bypass crossfade are handled by the shared core. */
+    Not carried over yet: the loudness target selector and LUFS meter (display only) and the
+    factory presets. Input and output gain and the bypass crossfade are handled by the shared
+    core; the cap on output gain is served there through getMaxOutputGainDb(). */
 class Summit : public Module
 {
 public:
@@ -27,6 +27,9 @@ public:
     int getLatencySamples() const override { return lookback; }
     juce::String getModuleMeterLabel() const override { return "Gain reduction"; }
     float readModuleMeter() override { return -gainToDb (minGain.exchange (1.0f)); }
+    /** Output gain after the limiter may raise peaks at most back to 0 dBFS, so it stops at
+        minus the ceiling: a ceiling of -1 dB allows up to +1 dB. Trimming down is unrestricted. */
+    float getMaxOutputGainDb() const override { return -getParam (pCeiling); }
 
     void prepare (double sr, int, int channels) override
     {

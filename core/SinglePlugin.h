@@ -61,7 +61,7 @@ public:
         ramp (b, lastIn, dbToGain (inGain->get()));
         inMeter.push (b);
         slot.process (b, bypass->get());
-        ramp (b, lastOut, dbToGain (outGain->get()));
+        ramp (b, lastOut, dbToGain (juce::jmin (outGain->get(), module->getMaxOutputGainDb())));
         outMeter.push (b);
     }
     void getStateInformation (juce::MemoryBlock& dest) override
@@ -153,7 +153,11 @@ public:
         look::footer (g, r.removeFromBottom (34));
         g.setColour (look::panel); g.fillRoundedRectangle (panelArea.toFloat(), 10.0f);
         g.setColour (look::dim); g.setFont (look::font (15.0f));
-        g.drawText ("In", inLabel, juce::Justification::centred); g.drawText ("Out", outLabel, juce::Justification::centred);
+        g.drawText ("In", inLabel, juce::Justification::centred);
+        // Say so when the module holds the output gain below the setting, or the control looks broken.
+        const float outCap = proc.getModule().getMaxOutputGainDb();
+        g.drawText (proc.outGain->get() > outCap + 0.001f ? "Out max " + juce::String (outCap, 1) : juce::String ("Out"),
+                    outLabel, juce::Justification::centred);
         if (proc.getModule().getModuleMeterLabel().isNotEmpty())
         {
             g.setColour (look::blue); g.setFont (look::font (22.0f, true));

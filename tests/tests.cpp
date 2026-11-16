@@ -1,5 +1,6 @@
 // Headless checks: limiter ceiling, latency, bypass alignment, rack state and loudness.
 #include "../plugins/Basecamp/BasecampProcessor.h"
+#include "../core/SinglePlugin.h"
 #include <iostream>
 
 using namespace ps;
@@ -115,6 +116,26 @@ int main (int argc, char** argv)
             check (gainToDb (tp) <= -1.0f + 0.1f, "mode " + juce::String (mode) + ": true peak " + juce::String (gainToDb (tp), 2) + " dBTP within 0.1 dB of the ceiling");
             check (s.readModuleMeter() > 3.0f, "mode " + juce::String (mode) + ": gain reduction is reported");
         }
+    }
+
+    std::cout << "Summit output gain" << std::endl;
+    {
+        SinglePluginProcessor p (std::make_unique<Summit>());
+        auto mp = p.getModuleParams();
+        auto set = [&] (int i, float v) { mp[(size_t) i]->setValue (mp[(size_t) i]->getSpec().toNorm (v)); };
+        set (Summit::pThreshold, -6.0f); set (Summit::pCeiling, -1.0f); set (Summit::pTruePeak, 1.0f);
+        p.prepareToPlay (sr, block);
+        juce::MidiBuffer mb;
+        auto peakWith = [&] (float outDb)
+        {
+            *p.outGain = outDb;
+            auto b = sine (sr, 48000, 220.0, 0.9f);
+            runBlocks (b, block, [&] (auto& v) { p.processBlock (v, mb); });
+            return gainToDb (b.getMagnitude (24000, 24000));
+        };
+        const float up = peakWith (6.0f), down = peakWith (-6.0f);
+        check (up <= 0.05f, "output gain +6 over a -1 dB ceiling is held to 0 dBFS (peak " + juce::String (up, 2) + " dB)");
+        check (down < -6.5f && down > -7.5f, "trimming down is not capped (peak " + juce::String (down, 2) + " dB)");
     }
 
     std::cout << "Dropoff" << std::endl;

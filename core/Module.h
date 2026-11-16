@@ -31,6 +31,11 @@ public:
     virtual juce::String getModuleMeterLabel() const { return {}; }
     virtual float readModuleMeter() { return 0.0f; }
 
+    /** Highest output gain in dB the shared wrapper may apply after this module, read every
+        block. A module that promises a peak level (Summit's ceiling) lowers this so the gain
+        after it cannot break that promise. Default: the full range of the output gain control. */
+    virtual float getMaxOutputGainDb() const { return 18.0f; }
+
     /** Upgrade a saved SLOT/MODULE tree written by an older version of this module. */
     virtual juce::ValueTree migrate (juce::ValueTree saved, int /*fromVersion*/) { return saved; }
 
