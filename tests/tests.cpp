@@ -183,6 +183,38 @@ int main (int argc, char** argv)
         check (std::abs (l.get() - (-23.0f)) < 0.2f, "-20 dBFS 997 Hz tone in one channel reads " + juce::String (l.get(), 2) + " LUFS (expect -23.0)");
     }
 
+    std::cout << "Integrated loudness" << std::endl;
+    {
+        auto oneChannel = [&] (float amp, int seconds)
+        {
+            auto t = sine (sr, (int) sr * seconds, 997.0, amp, 1);
+            juce::AudioBuffer<float> b (2, t.getNumSamples()); b.clear();
+            b.copyFrom (0, 0, t, 0, 0, t.getNumSamples());
+            return b;
+        };
+        IntegratedLoudness l; l.prepare (sr, 2);
+        auto tone = oneChannel (0.1f, 10);
+        runBlocks (tone, block, [&] (auto& v) { l.process (v); });
+        const float steady = l.get();
+        check (std::abs (steady - (-23.0f)) < 0.2f, "-20 dBFS 997 Hz tone reads " + juce::String (steady, 2) + " LUFS (expect -23.0)");
+
+        // The blocks straddling the end of the tone are above the relative gate and do count,
+        // so the figure dips slightly; the silence itself must then add nothing at all.
+        juce::AudioBuffer<float> quietRoom (2, (int) sr * 10); quietRoom.clear();
+        runBlocks (quietRoom, block, [&] (auto& v) { l.process (v); });
+        const float afterSilence = l.get();
+        runBlocks (quietRoom, block, [&] (auto& v) { l.process (v); });
+        check (l.get() == afterSilence && std::abs (afterSilence - steady) < 0.2f,
+               "silence is gated out: " + juce::String (afterSilence, 2) + " LUFS, and ten seconds more changes nothing");
+
+        IntegratedLoudness r; r.prepare (sr, 2);
+        auto loud = oneChannel (0.1f, 10), faint = oneChannel (0.01f, 10);
+        runBlocks (loud, block, [&] (auto& v) { r.process (v); });
+        runBlocks (faint, block, [&] (auto& v) { r.process (v); });
+        check (std::abs (r.get() - (-23.0f)) < 0.2f, "a passage 20 dB quieter falls under the relative gate ("
+               + juce::String (r.get(), 2) + " LUFS; without gating it would read about -26)");
+    }
+
     std::cout << "Basecamp" << std::endl;
     {
         BasecampProcessor p; p.setPlayConfigDetails (2, 2, sr, block); p.prepareToPlay (sr, block);

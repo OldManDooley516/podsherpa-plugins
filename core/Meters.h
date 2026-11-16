@@ -77,8 +77,8 @@ private:
     std::vector<State> state;
 };
 
-/** Short-term loudness (3 s window, ITU-R BS.1770 K-weighting, no gating). */
-class ShortTermLoudness
+/** ITU-R BS.1770 K-weighting: a high shelf then a high pass, with its own state per channel. */
+class KWeighting
 {
 public:
     void prepare (double sr, int numChannels)
@@ -97,42 +97,124 @@ public:
             s2 = { 1.0, -2.0, 1.0, 2.0 * (K * K - 1.0) / a0, (1.0 - K / Q + K * K) / a0 };
         }
         state.assign ((size_t) numChannels, {});
+    }
+    void reset() { for (auto& z : state) z = {}; }
+    int getNumChannels() const { return (int) state.size(); }
+    double filter (int c, double x)
+    {
+        auto& z = state[(size_t) c];
+        double y = s1[0] * x + z[0]; z[0] = s1[1] * x - s1[3] * y + z[1]; z[1] = s1[2] * x - s1[4] * y;
+        x = y;
+        y = s2[0] * x + z[2]; z[2] = s2[1] * x - s2[3] * y + z[3]; z[3] = s2[2] * x - s2[4] * y;
+        return y;
+    }
+
+private:
+    std::array<double, 5> s1 {}, s2 {};
+    std::vector<std::array<double, 4>> state;
+};
+
+/** Loudness in LUFS of a K-weighted mean square, summed over channels at unit weight. */
+inline float loudnessOf (double meanSquare) { return meanSquare > 1.0e-12 ? (float) (-0.691 + 10.0 * std::log10 (meanSquare)) : -120.0f; }
+
+/** Short-term loudness (3 s window, ITU-R BS.1770 K-weighting, no gating). */
+class ShortTermLoudness
+{
+public:
+    void prepare (double sr, int numChannels)
+    {
+        kw.prepare (sr, numChannels);
         hop = juce::jmax (1, (int) (sr * 0.1));
         blocks.fill (0.0); blockPos = 0; count = 0; acc = 0.0; filled = 0;
         lufs.store (-120.0f);
     }
     void process (const juce::AudioBuffer<float>& b)
     {
-        const int nc = juce::jmin (b.getNumChannels(), (int) state.size());
+        const int nc = juce::jmin (b.getNumChannels(), kw.getNumChannels());
         for (int n = 0; n < b.getNumSamples(); ++n)
         {
-            for (int c = 0; c < nc; ++c)
-            {
-                auto& z = state[(size_t) c];
-                double x = b.getSample (c, n);
-                double y = s1[0] * x + z[0]; z[0] = s1[1] * x - s1[3] * y + z[1]; z[1] = s1[2] * x - s1[4] * y;
-                x = y;
-                y = s2[0] * x + z[2]; z[2] = s2[1] * x - s2[3] * y + z[3]; z[3] = s2[2] * x - s2[4] * y;
-                acc += y * y;
-            }
+            for (int c = 0; c < nc; ++c) { const double y = kw.filter (c, (double) b.getSample (c, n)); acc += y * y; }
             if (++count >= hop)
             {
                 blocks[(size_t) blockPos] = acc / hop; blockPos = (blockPos + 1) % (int) blocks.size();
                 filled = juce::jmin (filled + 1, (int) blocks.size());
                 acc = 0.0; count = 0;
                 double sum = 0.0; for (double v : blocks) sum += v;
-                const double ms = sum / filled;
-                lufs.store (ms > 1.0e-12 ? (float) (-0.691 + 10.0 * std::log10 (ms)) : -120.0f);
+                lufs.store (loudnessOf (sum / filled));
             }
         }
     }
     float get() const { return lufs.load(); }
 
 private:
-    std::array<double, 5> s1 {}, s2 {};
-    std::vector<std::array<double, 4>> state;
+    KWeighting kw;
     std::array<double, 30> blocks {};
     int hop = 4800, blockPos = 0, count = 0, filled = 0;
+    double acc = 0.0;
+    std::atomic<float> lufs { -120.0f };
+};
+
+/** Integrated loudness, ITU-R BS.1770-4: 400 ms blocks overlapping by 75 %, an absolute gate at
+    -70 LUFS, then a relative gate 10 LU below the mean of whatever the absolute gate kept, so
+    pauses and quiet passages do not drag the figure down. The blocks that survive the absolute
+    gate are counted into a histogram 0.1 dB wide, so an hour costs no more memory than a second;
+    the relative gate therefore lands within 0.1 dB of its exact position. */
+class IntegratedLoudness
+{
+public:
+    void prepare (double sr, int numChannels)
+    {
+        kw.prepare (sr, numChannels);
+        hop = juce::jmax (1, (int) (sr * 0.1));   // a quarter of the 400 ms block
+        reset();
+    }
+    void reset()
+    {
+        kw.reset();
+        bins.fill (0); sums.fill (0.0); recent.fill (0.0);
+        ready = 0; count = 0; acc = 0.0;
+        lufs.store (-120.0f);
+    }
+    void process (const juce::AudioBuffer<float>& b)
+    {
+        const int nc = juce::jmin (b.getNumChannels(), kw.getNumChannels());
+        for (int n = 0; n < b.getNumSamples(); ++n)
+        {
+            for (int c = 0; c < nc; ++c) { const double y = kw.filter (c, (double) b.getSample (c, n)); acc += y * y; }
+            if (++count < hop) continue;
+            recent[(size_t) (ready & 3)] = acc / hop; acc = 0.0; count = 0; ++ready;
+            if (ready < 4) continue;
+            const double z = 0.25 * (recent[0] + recent[1] + recent[2] + recent[3]);   // one 400 ms block
+            const float l = loudnessOf (z);
+            if (l > absoluteGate)
+            {
+                const int i = binOf (l); ++bins[(size_t) i]; sums[(size_t) i] += z;
+                lufs.store (gated());
+            }
+        }
+    }
+    float get() const { return lufs.load(); }
+
+private:
+    static constexpr float absoluteGate = -70.0f;
+    static constexpr int numBins = 901;                                     // -70.0 to +20.0 LUFS
+    static int binOf (float l) { return juce::jlimit (0, numBins - 1, (int) std::lround ((l - absoluteGate) * 10.0f)); }
+    float gated() const
+    {
+        double sum = 0.0; juce::int64 n = 0;
+        for (int i = 0; i < numBins; ++i) { sum += sums[(size_t) i]; n += bins[(size_t) i]; }
+        if (n == 0) return -120.0f;
+        const float relative = loudnessOf (sum / (double) n) - 10.0f;
+        double kept = 0.0; juce::int64 keptN = 0;
+        for (int i = juce::jmax (0, binOf (relative) + 1); i < numBins; ++i) { kept += sums[(size_t) i]; keptN += bins[(size_t) i]; }
+        return keptN == 0 ? -120.0f : loudnessOf (kept / (double) keptN);
+    }
+    KWeighting kw;
+    std::array<juce::int64, numBins> bins {};
+    std::array<double, numBins> sums {};
+    std::array<double, 4> recent {};
+    juce::int64 ready = 0;
+    int hop = 4800, count = 0;
     double acc = 0.0;
     std::atomic<float> lufs { -120.0f };
 };

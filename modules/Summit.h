@@ -8,9 +8,11 @@ namespace ps
     Peaks at the threshold are scaled to the ceiling; a 3 ms look-ahead moving average of the
     gain guarantees the ceiling without a hard clipper.
 
-    Not carried over yet: the loudness target selector and LUFS meter (display only) and the
-    factory presets. Input and output gain and the bypass crossfade are handled by the shared
-    core; the cap on output gain is served there through getMaxOutputGainDb(). */
+    Integrated loudness of the output is measured (BS.1770-4, gated) and read with
+    getIntegratedLufs(). Not carried over yet: the loudness target selector, which needs the
+    JSFX to say which targets it offers, and the factory presets. Input and output gain and the
+    bypass crossfade are handled by the shared core; the cap on output gain is served there
+    through getMaxOutputGainDb(). */
 class Summit : public Module
 {
 public:
@@ -31,6 +33,13 @@ public:
         minus the ceiling: a ceiling of -1 dB allows up to +1 dB. Trimming down is unrestricted. */
     float getMaxOutputGainDb() const override { return -getParam (pCeiling); }
 
+    /** Integrated loudness of what the limiter puts out, in LUFS, measured from the last reset.
+        It does not include the shared wrapper's output gain. -120 until a 400 ms block has
+        passed the absolute gate. */
+    float getIntegratedLufs() const { return loudness.get(); }
+    /** Starts the measurement again. Safe from any thread: the audio thread does the work. */
+    void restartLoudness() { restart.store (true, std::memory_order_relaxed); }
+
     void prepare (double sr, int, int channels) override
     {
         sampleRate = sr; numChannels = juce::jmin (channels, maxChannels);
@@ -42,6 +51,7 @@ public:
         gainBuf.assign ((size_t) window, 1.0);
         qVal.assign ((size_t) capacity, 0.0); qTime.assign ((size_t) capacity, 0);
         tp.prepare (numChannels);
+        loudness.prepare (sr, numChannels);
         paramC = std::exp (-1.0 / (0.02 * sr));
         reset();
     }
@@ -50,6 +60,7 @@ public:
         for (auto& a : audio) std::fill (a.begin(), a.end(), 0.0);
         std::fill (gainBuf.begin(), gainBuf.end(), 1.0);
         tp.reset();
+        loudness.reset(); restart.store (false, std::memory_order_relaxed);
         gpos = apos = head = tail = 0; clock = 0; gainSum = (double) window; gf = gs = 1.0;
         thrDb = getParam (pThreshold); ceilDb = getParam (pCeiling); speed = 10.0 - getParam (pSpeed);
     }
@@ -61,6 +72,7 @@ public:
         const double fk = mode == 1 ? 0.2 : 0.4, sk = mode == 1 ? 1.0 : 2.0, mixf = mode == 1 ? 0.8 : 0.6;
         const int nc = juce::jmin (b.getNumChannels(), numChannels);
         double blockMin = 1.0, xs[maxChannels] = {};
+        if (restart.exchange (false, std::memory_order_relaxed)) loudness.reset();
 
         for (int i = 0; i < b.getNumSamples(); ++i)
         {
@@ -106,6 +118,7 @@ public:
             apos = readPos; ++clock;
             blockMin = juce::jmin (blockMin, applied);
         }
+        loudness.process (b);
         float old = minGain.load(); const float bm = (float) blockMin;
         while (bm < old && ! minGain.compare_exchange_weak (old, bm)) {}
     }
@@ -132,6 +145,8 @@ private:
     int numChannels = 2, look = 144, window = 145, lookback = 152, abuf = 153, capacity = 154;
     int gpos = 0, apos = 0, head = 0, tail = 0; juce::int64 clock = 0;
     TruePeak tp;
+    IntegratedLoudness loudness;
+    std::atomic<bool> restart { false };
     std::vector<std::vector<double>> audio;
     std::vector<double> gainBuf, qVal; std::vector<juce::int64> qTime;
     std::atomic<float> minGain { 1.0f };
