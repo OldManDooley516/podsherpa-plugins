@@ -36,5 +36,7 @@ int main (int argc, char** argv)
     for (int i = 0; i < n; ++i) { out[(size_t) (2 * i)] = b.getSample (0, i); out[(size_t) (2 * i + 1)] = b.getSample (1, i); }
     juce::File::getCurrentWorkingDirectory().getChildFile (argv[3]).replaceWithData (out.data(), out.size() * sizeof (float));
     std::cout << argv[1] << ": " << n << " samples, latency " << m->getLatencySamples() << std::endl;
+    // Scree's repair count is the figure the JSFX shows, so a port can be checked against it.
+    if (auto* s = dynamic_cast<ps::Scree*> (m.get())) std::cout << "  clicks fixed: " << s->getClicksFixed() << std::endl;
     return 0;
 }
