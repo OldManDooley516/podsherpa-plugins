@@ -273,6 +273,28 @@ int main (int argc, char** argv)
         check (std::abs (mq[(size_t) Scree::pSensitivity]->getReal() - 80.0f) < 0.01f, "the settings beside it still come back (Sensitivity 80)");
     }
 
+    std::cout << "Clearing learns a noise profile and keeps it" << std::endl;
+    {
+        SinglePluginProcessor p (std::make_unique<Clearing>());
+        auto& c = static_cast<Clearing&> (p.getModule());
+        p.prepareToPlay (sr, block);
+        juce::MidiBuffer mb; juce::Random rng (1);
+        p.getModuleParams()[(size_t) Clearing::pLearn]->setValue (1.0f);
+        for (int k = 0; k < (int) (sr * 10.0) / block; ++k)   // ten seconds of steady noise
+        {
+            juce::AudioBuffer<float> n (2, block);
+            for (int ch = 0; ch < 2; ++ch) for (int i = 0; i < block; ++i) n.setSample (ch, i, 0.01f * (rng.nextFloat() * 2.0f - 1.0f));
+            p.processBlock (n, mb);
+        }
+        check (c.hasProfile() && ! c.isLearning(), "holding Learn over steady noise captures a profile and stops on its own after eight seconds");
+
+        juce::MemoryBlock state; p.getStateInformation (state);
+        SinglePluginProcessor q (std::make_unique<Clearing>());
+        q.setStateInformation (state.getData(), (int) state.getSize());
+        check (static_cast<Clearing&> (q.getModule()).hasProfile(), "the profile comes back when the project is reopened");
+        check (q.getModuleParams()[(size_t) Clearing::pLearn]->getReal() < 0.5f, "while Learn itself does not come back on");
+    }
+
     std::cout << "Integrated loudness" << std::endl;
     {
         auto oneChannel = [&] (float amp, int seconds)

@@ -92,6 +92,7 @@ juce::ValueTree BasecampProcessor::saveSlot (int s) const
             c.setProperty ("value", specs[k].transient ? specs[k].def : specs[k].fromNorm (hp.pool[k]->getNorm()), nullptr);
             t.appendChild (c, nullptr);
         }
+        if (auto extra = m->saveExtraState(); extra.isValid()) t.appendChild (extra, nullptr);
     }
     t.setProperty ("index", s, nullptr);
     t.setProperty ("bypass", hp.bypass->get(), nullptr);
@@ -121,6 +122,9 @@ void BasecampProcessor::loadSlot (int s, juce::ValueTree saved, bool notify)
                 const auto c = saved.getChildWithProperty ("id", spec.id);
                 mod->setParam (k, spec.snap (spec.transient || ! c.isValid() ? spec.def : (float) c.getProperty ("value", spec.def)));
             }
+        if (mod != nullptr)
+            for (int k = 0; k < saved.getNumChildren(); ++k)
+                if (! saved.getChild (k).hasType ("PARAM")) mod->loadExtraState (saved.getChild (k));
         {
             const juce::ScopedLock cl (chainLock);   // the audio thread skips at most one block here
             old = slots[(size_t) s].setModule (std::move (m));

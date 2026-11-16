@@ -47,6 +47,11 @@ public:
     virtual juce::String getFactoryPresetName (int) const { return {}; }
     virtual void applyFactoryPreset (int) {}
 
+    /** State a module keeps that is not a parameter: Clearing's learned noise profile. Saved
+        with the project and handed back on load, the way the JSFX keeps it in @serialize. */
+    virtual juce::ValueTree saveExtraState() const { return {}; }
+    virtual void loadExtraState (const juce::ValueTree&) {}
+
     /** Upgrade a saved SLOT/MODULE tree written by an older version of this module. */
     virtual juce::ValueTree migrate (juce::ValueTree saved, int /*fromVersion*/) { return saved; }
 

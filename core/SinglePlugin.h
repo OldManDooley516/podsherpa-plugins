@@ -102,6 +102,7 @@ public:
             c.setProperty ("id", s.id, nullptr); c.setProperty ("value", s.transient ? s.def : p->getReal(), nullptr);
             t.appendChild (c, nullptr);
         }
+        if (auto extra = module->saveExtraState(); extra.isValid()) t.appendChild (extra, nullptr);
         if (auto xml = t.createXml()) copyXmlToBinary (*xml, dest);
     }
     void setStateInformation (const void* data, int size) override
@@ -120,6 +121,8 @@ public:
             const auto c = t.getChildWithProperty ("id", s.id);
             p->setValue (s.toNorm (s.transient || ! c.isValid() ? s.def : (float) c.getProperty ("value", s.def)));
         }
+        for (int i = 0; i < t.getNumChildren(); ++i)
+            if (! t.getChild (i).hasType ("PARAM")) module->loadExtraState (t.getChild (i));
         updateHostDisplay (ChangeDetails().withParameterInfoChanged (true));
     }
     bool hasEditor() const override { return true; }

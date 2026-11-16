@@ -13,7 +13,8 @@ namespace ps
     As in 0.4.1, the noise estimate only measures frames that hold real audio from end to end
     and is kept across playback starts, so reduction is there from the first moment.
 
-    Not carried over yet: the Learn button and saving a learned profile with the project (the
+    Difference from the JSFX: finishing a learn does not move Noise source to Learned by
+    itself. The profile is ready and the switch selects it. Not carried over yet: (the
     engine supports both through learnStart() / learnStop(), but there is no button or saved
     state yet, so the Noise source switch has nothing to select), the spectrum display and the
     factory presets as a menu. Listen is a normal saved parameter here, unlike the JSFX.
@@ -21,12 +22,13 @@ namespace ps
 class Clearing : public Module
 {
 public:
-    enum { pReduction, pSensitivity, pSmoothing, pSource, pListen };
+    enum { pReduction, pSensitivity, pSmoothing, pSource, pListen, pLearn };
     Clearing() : Module ({ ParamSpec::number ("reduction", "Reduction", "dB", 0.0f, 30.0f, 12.0f),
                            ParamSpec::number ("sensitivity", "Sensitivity", "%", 0.0f, 100.0f, 50.0f, false, 0),
                            ParamSpec::number ("smoothing", "Smoothing", "%", 0.0f, 100.0f, 50.0f, false, 0),
                            ParamSpec::choice ("source", "Noise source", { "Auto", "Learned" }, 0),
-                           ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved() }), fft (N)
+                           ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved(),
+                           ParamSpec::toggle ("learn", "Learn noise", false).notSaved() }), fft (N)
     {
         const double pi = juce::MathConstants<double>::pi;
         for (int i = 0; i < N; ++i) wn[(size_t) i] = 0.5 - 0.5 * std::cos (2.0 * pi * i / N);
@@ -45,6 +47,28 @@ public:
     bool isLearning() const { return learning.load(); }
     bool hasProfile() const { return have.load(); }
 
+    /** The learned noise profile, so a project reopens with it, as the JSFX does. */
+    juce::ValueTree saveExtraState() const override
+    {
+        if (! have.load()) return {};
+        juce::ValueTree t ("CLEARING");
+        juce::MemoryBlock mb (prof.size() * sizeof (float));
+        auto* f = static_cast<float*> (mb.getData());
+        for (size_t k = 0; k < prof.size(); ++k) f[k] = (float) prof[k];
+        t.setProperty ("bins", (int) prof.size(), nullptr);
+        t.setProperty ("profile", mb.toBase64Encoding(), nullptr);
+        return t;
+    }
+    void loadExtraState (const juce::ValueTree& t) override
+    {
+        if (! t.hasType ("CLEARING") || (int) t.getProperty ("bins", 0) != (int) prof.size()) return;
+        juce::MemoryBlock mb;
+        if (! mb.fromBase64Encoding (t.getProperty ("profile").toString()) || mb.getSize() != prof.size() * sizeof (float)) return;
+        auto* f = static_cast<const float*> (mb.getData());
+        for (size_t k = 0; k < prof.size(); ++k) prof[k] = (double) f[k];
+        have.store (true);
+    }
+
     void prepare (double sr, int, int channels) override
     {
         sampleRate = sr; chans.assign ((size_t) channels, {});
@@ -56,6 +80,7 @@ public:
         for (auto& c : chans) { std::fill (c.in.begin(), c.in.end(), 0.0); std::fill (c.out.begin(), c.out.end(), 0.0); }
         std::fill (ps.begin(), ps.end(), 0.0); std::fill (gsm.begin(), gsm.end(), 1.0); std::fill (acc.begin(), acc.end(), 0.0);
         first = true; live = 0; zrun = 0; lacc = 0; lcount = 0; wp = 0; hc = 0; learning.store (false);
+        learnHeld = false;   // so a Learn left switched on re-arms after a stop
     }
     void process (juce::AudioBuffer<float>& b) override
     {
@@ -109,6 +134,12 @@ private:
         }
         for (size_t k = 0; k < bins; ++k) pm[k] /= nc;
 
+        // Learn runs while the control is on, and the engine stops it after eight seconds.
+        if (const bool wantLearn = getParam (pLearn) > 0.5f; wantLearn != learnHeld)
+        {
+            learnHeld = wantLearn;
+            if (wantLearn) learnStart(); else learnStop();
+        }
         int cmd = command.exchange (0);
         if (cmd == 1) { learning.store (true); lcount = 0; lacc = 0; std::fill (acc.begin(), acc.end(), 0.0); cmd = 0; }
         if (learning.load())
@@ -187,6 +218,7 @@ private:
     bool first = true, estOk = false;
     std::atomic<int> command { 0 };
     std::atomic<bool> learning { false }, have { false };
+    bool learnHeld = false;
     std::atomic<float> maxRed { 0.0f };
 };
 } // namespace ps
