@@ -273,6 +273,40 @@ int main (int argc, char** argv)
         check (std::abs (mq[(size_t) Scree::pSensitivity]->getReal() - 80.0f) < 0.01f, "the settings beside it still come back (Sensitivity 80)");
     }
 
+    std::cout << "Gust (draft)" << std::endl;
+    {
+        Gust g; g.prepare (sr, block, 2);
+        // A steady voice-like tone well above the split must be left completely alone.
+        auto tone = sine (sr, 48000, 400.0, 0.3f);
+        auto before = tone;
+        runBlocks (tone, block, [&] (auto& v) { g.process (v); });
+        check (g.getPopCount() == 0, "a steady 400 Hz tone is not mistaken for a pop");
+
+        // A low thump dropped into that tone is.
+        g.reset();
+        auto mixed = sine (sr, 48000, 400.0, 0.3f);
+        for (int c = 0; c < 2; ++c)
+            for (int i = 0; i < 2000; ++i)
+            {
+                const double t = i / sr, e = std::exp (-t / 0.015);
+                mixed.setSample (c, 24000 + i, mixed.getSample (c, 24000 + i) + (float) (0.5 * e * std::sin (2.0 * juce::MathConstants<double>::pi * 60.0 * t)));
+            }
+        auto popIn = mixed;
+        runBlocks (mixed, block, [&] (auto& v) { g.process (v); });
+        float wasThere = 0.0f, isThere = 0.0f;
+        for (int i = 24000; i < 26000; ++i) { wasThere = juce::jmax (wasThere, std::abs (popIn.getSample (0, i))); isThere = juce::jmax (isThere, std::abs (mixed.getSample (0, i))); }
+        check (g.getPopCount() >= 1 && isThere < wasThere * 0.8f, "a 60 Hz thump in the middle of it is found and turned down");
+
+        // Range 0 leaves the sound alone: the crossover adds back up flat.
+        Gust q; q.prepare (sr, block, 2); q.setParam (Gust::pRange, 0.0f);
+        auto flatIn = sine (sr, 24000, 500.0, 0.4f);
+        auto flatOut = flatIn;
+        runBlocks (flatOut, block, [&] (auto& v) { q.process (v); });
+        double ea = 0.0, eb = 0.0;
+        for (int i = 12000; i < 24000; ++i) { ea += flatIn.getSample (0, i) * flatIn.getSample (0, i); eb += flatOut.getSample (0, i) * flatOut.getSample (0, i); }
+        check (std::abs (10.0 * std::log10 (eb / ea)) < 0.05, "with Range at 0 the crossover adds back up flat");
+    }
+
     std::cout << "Serac" << std::endl;
     {
         auto reduction = [&] (Serac& s, double freq, float amp, int samples = 24000)

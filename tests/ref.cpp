@@ -39,5 +39,6 @@ int main (int argc, char** argv)
     // Scree's repair count is the figure the JSFX shows, so a port can be checked against it.
     if (auto* s = dynamic_cast<ps::Scree*> (m.get())) std::cout << "  clicks fixed: " << s->getClicksFixed() << std::endl;
     if (auto* s = dynamic_cast<ps::Summit*> (m.get())) std::cout << "  integrated loudness: " << s->getIntegratedLufs() << " LUFS" << std::endl;
+    if (auto* s = dynamic_cast<ps::Gust*> (m.get())) std::cout << "  pops turned down: " << s->getPopCount() << std::endl;
     return 0;
 }

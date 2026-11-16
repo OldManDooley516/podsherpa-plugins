@@ -45,6 +45,7 @@ endfunction()
 
 ps_plugin(Altitude  "PodSherpa Altitude"  PsAl Dynamics plugins/Altitude/Plugin.cpp)
 ps_plugin(Ridgeline "PodSherpa Ridgeline" PsRl Dynamics plugins/Ridgeline/Plugin.cpp)
+ps_plugin(Gust      "PodSherpa Gust"      PsGu Restoration plugins/Gust/Plugin.cpp)
 ps_plugin(Scree     "PodSherpa Scree"     PsSc Restoration plugins/Scree/Plugin.cpp)
 ps_plugin(Serac     "PodSherpa Serac"     PsSe Restoration plugins/Serac/Plugin.cpp)
 ps_plugin(Summit   "PodSherpa Summit"   PsSm Dynamics plugins/Summit/Plugin.cpp)
