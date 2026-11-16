@@ -4,10 +4,16 @@
 
 namespace ps
 {
-/** Scree: click remover. Audio path ported from the JSFX Scree v0.4.1: clicks are found as
+/** Scree: click remover. Audio path ported from the JSFX Scree v0.4.2: clicks are found as
     sudden spikes in the second difference of the signal (all channels linked), and each one is
     rebuilt from the sound on both sides by forward and backward linear prediction (order 32),
     crossfaded. The patch covers 3 samples before the click and 6 after. 8 ms latency.
+
+    A detection is only repaired if its spike is at least twice the largest spike nearby: the
+    20 ms before it and the few ms after it, each held off by 1 ms. A real click stands alone,
+    while a voice's own pitch pulses come in a row of similar spikes. The verdict therefore
+    waits for the sound that follows, up to just before the audio leaves the delay line, so the
+    latency is unchanged.
 
     Listen plays only what was removed. Unlike the JSFX, it is a normal parameter here, so it is
     saved with the project and can be rendered by accident; revisit when the real interface is built.
@@ -35,6 +41,9 @@ public:
         sampleRate = sr;
         delay = (int) std::floor (0.008 * sr);
         settle = juce::jmax (64, (int) std::floor (0.003 * sr));
+        guard = (int) std::floor (0.001 * sr);
+        span = (int) std::floor (0.02 * sr);
+        hist.assign ((size_t) ring, 0.0);
         chans.assign ((size_t) channels, {});
         const size_t work = (size_t) (settle + (int) std::floor (0.003 * sr) + 64);
         tw.assign (work, 0.0); ff.assign (work, 0.0); bb.assign (work, 0.0);
@@ -44,7 +53,9 @@ public:
     void reset() override
     {
         for (auto& c : chans) { c.buf.fill (0.0); c.org.fill (0.0); c.p1 = c.p2 = 0.0; }
+        std::fill (hist.begin(), hist.end(), 0.0);
         wp = 0; runOn = false; ageStart = ageEnd = 0; env = 0.0;
+        clock = 0; pending = false; pendStart = pendEnd = 0; pendPeak = runPeak = 0.0;
     }
     void process (juce::AudioBuffer<float>& b) override
     {
@@ -64,9 +75,12 @@ public:
                 hpm = juce::jmax (hpm, std::abs (h));
             }
             if (runOn) { ++ageStart; ++ageEnd; }
-            if (hpm > juce::jmax (0.0015, kk * env))
+            const bool fire = hpm > juce::jmax (0.0015, kk * env);
+            hist[(size_t) nI] = hpm; ++clock;
+            if (fire)
             {
-                if (runOn) ageEnd = 0; else { runOn = true; ageStart = 0; ageEnd = 0; }
+                if (runOn) { ageEnd = 0; runPeak = juce::jmax (runPeak, hpm); }
+                else { runOn = true; ageStart = 0; ageEnd = 0; runPeak = hpm; }
             }
             if (! runOn || ageStart > maxS) env += (hpm - env) * (hpm > env ? aup : adn);
             if (runOn && ageEnd >= settle)
@@ -75,11 +89,12 @@ public:
                 const int gl = ageStart - ageEnd + 1 + before + after;
                 if (gl <= maxS + before + after)
                 {
-                    const int gs = nI - ageStart - before, ge = nI - ageEnd + after;
-                    for (int c = 0; c < nc; ++c) repair (chans[(size_t) c].buf, gs, ge);
-                    clicks.fetch_add (1, std::memory_order_relaxed);
+                    // An earlier detection still waiting has had all the sound it is going to get.
+                    if (pending) decide (nI, nc);
+                    pending = true; pendStart = clock - ageStart; pendEnd = clock - ageEnd; pendPeak = runPeak;
                 }
             }
+            if (pending && clock - pendEnd >= juce::jmax (settle, delay - maxS - before - 4)) decide (nI, nc);
             wp = (wp + 1) & mask;
             const int ro = (nI - delay) & mask;
             for (int c = 0; c < nc; ++c)
@@ -101,6 +116,7 @@ public:
 
 private:
     static constexpr int ring = 4096, mask = ring - 1, order = 32, before = 3, after = 6;
+    static constexpr double ratio = 2.0;   // how far a click's spike must stand above its neighbours
     struct Chan { std::array<double, ring> buf {}, org {}; double p1 = 0.0, p2 = 0.0; };
 
     // Fits a linear predictor to x[0..M) (sine window, autocorrelation, Levinson) and extends x by gl samples.
@@ -149,11 +165,31 @@ private:
             buf[(size_t) ((gs + i) & mask)] = (1.0 - ws) * ff[(size_t) (M + i)] + ws * bb[(size_t) (M + gl - 1 - i)];
         }
     }
+    /** Settles the detection that is waiting: repairs it only if its spike stands clear of the
+        largest one nearby, looking back over the 20 ms before the click and forward over
+        everything heard since, each starting 1 ms clear of the click itself. */
+    void decide (int nI, int nc)
+    {
+        const int a = (int) (clock - pendStart), b = (int) (clock - pendEnd);
+        double near = 0.0;
+        int age = a + guard;
+        for (int k = juce::jmin (span, 3900 - age); k > 0; --k, ++age)
+            near = juce::jmax (near, hist[(size_t) ((nI - age) & mask)]);
+        for (age = b - guard; age > 0; --age)
+            near = juce::jmax (near, hist[(size_t) ((nI - age) & mask)]);
+        if (pendPeak >= ratio * near)
+        {
+            for (int c = 0; c < nc; ++c) repair (chans[(size_t) c].buf, nI - a - before, nI - b + after);
+            clicks.fetch_add (1, std::memory_order_relaxed);
+        }
+        pending = false;
+    }
     std::vector<Chan> chans;
-    std::vector<double> tw, ff, bb;
-    double sampleRate = 48000.0, env = 0.0, aup = 0.0, adn = 0.0;
-    int delay = 384, settle = 144, wp = 0, ageStart = 0, ageEnd = 0;
-    bool runOn = false;
+    std::vector<double> tw, ff, bb, hist;
+    double sampleRate = 48000.0, env = 0.0, aup = 0.0, adn = 0.0, runPeak = 0.0, pendPeak = 0.0;
+    int delay = 384, settle = 144, guard = 48, span = 960, wp = 0, ageStart = 0, ageEnd = 0;
+    juce::int64 clock = 0, pendStart = 0, pendEnd = 0;
+    bool runOn = false, pending = false;
     std::atomic<int> clicks { 0 };
 };
 } // namespace ps
