@@ -89,7 +89,7 @@ juce::ValueTree BasecampProcessor::saveSlot (int s) const
         {
             juce::ValueTree c ("PARAM");
             c.setProperty ("id", specs[k].id, nullptr);
-            c.setProperty ("value", specs[k].fromNorm (hp.pool[k]->getNorm()), nullptr);
+            c.setProperty ("value", specs[k].transient ? specs[k].def : specs[k].fromNorm (hp.pool[k]->getNorm()), nullptr);
             t.appendChild (c, nullptr);
         }
     }
@@ -119,7 +119,7 @@ void BasecampProcessor::loadSlot (int s, juce::ValueTree saved, bool notify)
             {
                 const auto& spec = mod->getParamSpecs()[(size_t) k];
                 const auto c = saved.getChildWithProperty ("id", spec.id);
-                mod->setParam (k, spec.snap (c.isValid() ? (float) c.getProperty ("value", spec.def) : spec.def));
+                mod->setParam (k, spec.snap (spec.transient || ! c.isValid() ? spec.def : (float) c.getProperty ("value", spec.def)));
             }
         {
             const juce::ScopedLock cl (chainLock);   // the audio thread skips at most one block here
@@ -147,6 +147,12 @@ void BasecampProcessor::loadSlot (int s, juce::ValueTree saved, bool notify)
         updateHostDisplay (ChangeDetails().withParameterInfoChanged (true).withLatencyChanged (true));
         sendChangeMessage();
     }
+}
+
+void BasecampProcessor::handleAsyncUpdate()
+{
+    refreshLatency();
+    updateHostDisplay (ChangeDetails().withLatencyChanged (true));
 }
 
 void BasecampProcessor::refreshLatency()
@@ -232,6 +238,12 @@ void BasecampProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuf
                 for (size_t k = 0; k < specs.size(); ++k) m->setParam ((int) k, specs[k].fromNorm (hp.pool[k]->getNorm()));
                 slot.process (b, hp.bypass->get() || (anySolo && ! hp.solo->get()));
             }
+
+            // A module whose latency followed a control (Phase, a look-ahead time) changes the
+            // rack's total. Telling the host is left to the message thread.
+            int total = 0;
+            for (auto& slot : slots) total += slot.getLatency();
+            if (total != totalLatency.load (std::memory_order_relaxed)) triggerAsyncUpdate();
         }
     }
 

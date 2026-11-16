@@ -26,6 +26,10 @@ public:
     virtual void reset() = 0;
     virtual void process (juce::AudioBuffer<float>& buffer) = 0;
     virtual int getLatencySamples() const { return 0; }
+    /** The largest latency this module can ask for at the prepared sample rate, whatever its
+        parameters are set to later. The slot sizes its bypass delay for this once, so a module
+        may change its latency between blocks without anything having to allocate. */
+    virtual int getMaxLatencySamples() const { return getLatencySamples(); }
 
     /** Module-specific meter (gain reduction in dB for Summit, and so on). Reading clears it. */
     virtual juce::String getModuleMeterLabel() const { return {}; }

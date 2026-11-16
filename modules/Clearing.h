@@ -26,7 +26,7 @@ public:
                            ParamSpec::number ("sensitivity", "Sensitivity", "%", 0.0f, 100.0f, 50.0f, false, 0),
                            ParamSpec::number ("smoothing", "Smoothing", "%", 0.0f, 100.0f, 50.0f, false, 0),
                            ParamSpec::choice ("source", "Noise source", { "Auto", "Learned" }, 0),
-                           ParamSpec::toggle ("listen", "Listen to what's removed", false) }), fft (N)
+                           ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved() }), fft (N)
     {
         const double pi = juce::MathConstants<double>::pi;
         for (int i = 0; i < N; ++i) wn[(size_t) i] = 0.5 - 0.5 * std::cos (2.0 * pi * i / N);

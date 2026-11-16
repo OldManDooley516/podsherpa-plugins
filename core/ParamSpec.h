@@ -13,6 +13,7 @@ struct ParamSpec
     Type type = Type::Float;
     float min = 0.0f, max = 1.0f, def = 0.0f;
     bool logScale = false;
+    bool transient = false;    // never saved with the project; always starts at its default
     int decimals = 1;
     juce::StringArray choices;
 
@@ -31,6 +32,10 @@ struct ParamSpec
     {
         ParamSpec s; s.id = id; s.name = name; s.type = Type::Bool; s.def = def ? 1.0f : 0.0f; return s;
     }
+
+    /** For a control that must never come back on when a project is reopened, such as Listen:
+        it stays automatable, but it is written out and read back as its default. */
+    ParamSpec notSaved() const { ParamSpec s = *this; s.transient = true; return s; }
 
     float snap (float v) const
     {

@@ -20,12 +20,13 @@ public:
     Dropoff() : Module ({ ParamSpec::number ("freq", "Cutoff", "Hz", 20.0f, 500.0f, 80.0f, true, 0),
                           ParamSpec::choice ("slope", "Slope", { "6 dB/oct", "12 dB/oct", "18 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct" }, 3),
                           ParamSpec::choice ("phase", "Phase", { "Natural (0 ms)", "Linear (43 ms)" }, 0),
-                          ParamSpec::toggle ("listen", "Listen to what's removed", false) }) {}
+                          ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved() }) {}
     juce::String getModuleId() const override { return "dropoff"; }
     juce::String getDisplayName() const override { return "Dropoff"; }
     juce::String getSubtitle() const override { return "High-pass filter"; }
     int getVersion() const override { return 1; }
     int getLatencySamples() const override { return linear ? LinearPhase::latency : 0; }
+    int getMaxLatencySamples() const override { return LinearPhase::latency; }
 
     void prepare (double sr, int, int channels) override
     {
@@ -46,6 +47,14 @@ public:
     {
         const int n = b.getNumSamples(), slope = juce::jlimit (0, 5, (int) std::floor (getParam (pSlope) + 0.5f));
         const int nc = juce::jmin (b.getNumChannels(), numChannels);
+        // Phase follows the control while playing. Both paths are always prepared, so the
+        // switch only clears the state the other one left behind; the host is told about the
+        // latency change by the plugin wrapper.
+        if (const bool wantLinear = getParam (pPhase) >= 0.5f; wantLinear != linear)
+        {
+            linear = wantLinear; fir.reset(); wp = 0; lastCheck = -1.0;
+            for (auto& c : dry) c.fill (0.0); for (auto& c : z) c.fill (0.0); for (auto& c : zl) c.fill (0.0);
+        }
         const bool listen = getParam (pListen) > 0.5f;
         if (slope != lastSlope) { for (auto& c : z) c.fill (0.0); for (auto& c : zl) c.fill (0.0); lastSlope = slope; }
         smoothed += ((double) getParam (pFreq) - smoothed) * (1.0 - std::exp (-(double) n / (sampleRate * 0.015)));

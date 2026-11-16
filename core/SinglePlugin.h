@@ -8,7 +8,7 @@ namespace ps
 inline const char* suiteVersion() { return "0.1"; }
 
 /** Wraps one module as its own VST3/AU plugin. Parameter IDs are "<module>.<param>". */
-class SinglePluginProcessor : public juce::AudioProcessor
+class SinglePluginProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
 {
 public:
     explicit SinglePluginProcessor (std::unique_ptr<Module> m)
@@ -49,6 +49,7 @@ public:
     void prepareToPlay (double sr, int block) override
     {
         slot.prepare (sr, block, getTotalNumOutputChannels());
+        reported.store (slot.getLatency(), std::memory_order_relaxed);
         setLatencySamples (slot.getLatency());
         lastIn = lastOut = -1000.0f;
     }
@@ -63,6 +64,15 @@ public:
         slot.process (b, bypass->get());
         ramp (b, lastOut, dbToGain (juce::jmin (outGain->get(), module->getMaxOutputGainDb())));
         outMeter.push (b);
+        // A control that changes the module's latency (Phase, Altitude's look-ahead) is answered
+        // on the message thread: telling the host from here is not safe in every host.
+        if (slot.getLatency() != reported.load (std::memory_order_relaxed)) triggerAsyncUpdate();
+    }
+    void handleAsyncUpdate() override
+    {
+        const int lat = slot.getLatency();
+        reported.store (lat, std::memory_order_relaxed);
+        setLatencySamples (lat);
     }
     void getStateInformation (juce::MemoryBlock& dest) override
     {
@@ -75,7 +85,8 @@ public:
         for (auto* p : params)
         {
             juce::ValueTree c ("PARAM");
-            c.setProperty ("id", p->getSpec().id, nullptr); c.setProperty ("value", p->getReal(), nullptr);
+            const auto s = p->getSpec();
+            c.setProperty ("id", s.id, nullptr); c.setProperty ("value", s.transient ? s.def : p->getReal(), nullptr);
             t.appendChild (c, nullptr);
         }
         if (auto xml = t.createXml()) copyXmlToBinary (*xml, dest);
@@ -94,7 +105,7 @@ public:
         {
             const auto s = p->getSpec();
             const auto c = t.getChildWithProperty ("id", s.id);
-            p->setValue (s.toNorm (c.isValid() ? (float) c.getProperty ("value", s.def) : s.def));
+            p->setValue (s.toNorm (s.transient || ! c.isValid() ? s.def : (float) c.getProperty ("value", s.def)));
         }
         updateHostDisplay (ChangeDetails().withParameterInfoChanged (true));
     }
@@ -115,6 +126,7 @@ private:
     ModuleSlot slot;
     std::vector<HostParam*> params;
     float lastIn = -1000.0f, lastOut = -1000.0f;
+    std::atomic<int> reported { 0 };
 };
 
 /** Plain first-pass editor: side rails (In left, Out right), power button top right, footer. */

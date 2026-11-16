@@ -31,19 +31,24 @@ public:
         const int n = buffer.getNumSamples(), nc = juce::jmin (buffer.getNumChannels(), numChannels);
         inMeter.push (buffer);
 
+        // A module may change its latency between blocks: a phase switch, a look-ahead time.
+        // The delay line is already as long as the module can ever ask for, so nothing allocates
+        // here; what is thrown away is the audio in flight, which the module loses too.
+        const int want = juce::jlimit (0, delayLine.getNumSamples(), module->getLatencySamples());
+        if (want != latency) { delayLine.clear(); delayPos = 0; latency = want; }
+
         // Dry path, delayed by the module's latency so bypass never shifts the audio.
         dry.setSize (numChannels, n, false, false, true);
-        const int lat = delayLine.getNumSamples();
         for (int c = 0; c < nc; ++c)
         {
             const float* in = buffer.getReadPointer (c);
             float* d = dry.getWritePointer (c);
-            if (lat == 0) { juce::FloatVectorOperations::copy (d, in, n); continue; }
+            if (latency == 0) { juce::FloatVectorOperations::copy (d, in, n); continue; }
             float* line = delayLine.getWritePointer (c);
             int p = delayPos;
-            for (int i = 0; i < n; ++i) { d[i] = line[p]; line[p] = in[i]; if (++p >= lat) p = 0; }
+            for (int i = 0; i < n; ++i) { d[i] = line[p]; line[p] = in[i]; if (++p >= latency) p = 0; }
         }
-        if (lat > 0) delayPos = (delayPos + n) % lat;
+        if (latency > 0) delayPos = (delayPos + n) % latency;
 
         wet.setTargetValue (bypassed ? 0.0f : 1.0f);
         const bool fullyDry = bypassed && ! wet.isSmoothing();
@@ -71,8 +76,9 @@ private:
     {
         module->prepare (sampleRate, blockSize, numChannels);
         module->reset();
-        delayLine.setSize (numChannels, module->getLatencySamples());
+        delayLine.setSize (numChannels, juce::jmax (1, module->getMaxLatencySamples()));
         delayLine.clear(); delayPos = 0;
+        latency = juce::jlimit (0, delayLine.getNumSamples(), module->getLatencySamples());
         dry.setSize (numChannels, blockSize);
         wet.reset (sampleRate, 0.010);
         wet.setCurrentAndTargetValue (1.0f);
@@ -80,7 +86,7 @@ private:
     std::unique_ptr<Module> module;
     juce::AudioBuffer<float> delayLine, dry;
     juce::SmoothedValue<float> wet { 1.0f };
-    int delayPos = 0, blockSize = 512, numChannels = 2;
+    int delayPos = 0, latency = 0, blockSize = 512, numChannels = 2;
     double sampleRate = 0.0;
 };
 } // namespace ps

@@ -174,6 +174,41 @@ int main (int argc, char** argv)
         check (err < 1.0e-6f, "bypassed slot outputs the input delayed by exactly its latency");
     }
 
+    std::cout << "Latency follows the controls" << std::endl;
+    {
+        Dropoff d; d.prepare (sr, block, 2);
+        check (d.getLatencySamples() == 0 && d.getMaxLatencySamples() == LinearPhase::latency,
+               "Dropoff starts at no latency but reserves room for the linear-phase delay");
+        auto tone = sine (sr, block, 1000.0, 0.5f);
+        d.setParam (Dropoff::pPhase, 1.0f); d.process (tone);
+        check (d.getLatencySamples() == LinearPhase::latency, "switching it to Linear while playing raises its latency to "
+               + juce::String (LinearPhase::latency) + " samples");
+        d.setParam (Dropoff::pPhase, 0.0f); d.process (tone);
+        check (d.getLatencySamples() == 0, "switching back to Natural drops it again");
+
+        Altitude a; a.prepare (sr, block, 2);
+        const int at15 = a.getLatencySamples();
+        auto voice = sine (sr, block, 300.0, 0.3f);
+        a.setParam (Altitude::pLookahead, 50.0f); a.process (voice);
+        check (at15 == (int) std::floor (sr * 0.015 + 0.5) && a.getLatencySamples() == (int) std::floor (sr * 0.05 + 0.5),
+               "Altitude's look-ahead follows its control, 15 ms to 50 ms, without re-preparing");
+    }
+
+    std::cout << "Slot follows a latency change" << std::endl;
+    {
+        ModuleSlot slot; slot.setModule (std::make_unique<Dropoff>()); slot.prepare (sr, block, 2);
+        slot.getModule()->setParam (Dropoff::pPhase, 1.0f);
+        auto warm = sine (sr, 24000, 440.0, 0.5f);
+        runBlocks (warm, block, [&] (auto& v) { slot.process (v, false); });
+        check (slot.getLatency() == LinearPhase::latency, "the slot picks the new latency up from the module");
+
+        auto in = sine (sr, 48000, 440.0, 0.5f); auto out = in;
+        runBlocks (out, block, [&] (auto& v) { slot.process (v, true); });
+        const int lat = slot.getLatency(); float err = 0.0f;
+        for (int i = 24000; i < 48000; ++i) err = juce::jmax (err, std::abs (out.getSample (0, i) - in.getSample (0, i - lat)));
+        check (err < 1.0e-6f, "and bypass still lines up exactly, at the new latency");
+    }
+
     std::cout << "Loudness" << std::endl;
     {
         ShortTermLoudness l; l.prepare (sr, 2);
@@ -181,6 +216,21 @@ int main (int argc, char** argv)
         juce::AudioBuffer<float> st (2, b.getNumSamples()); st.clear(); st.copyFrom (0, 0, b, 0, 0, b.getNumSamples());
         l.process (st);
         check (std::abs (l.get() - (-23.0f)) < 0.2f, "-20 dBFS 997 Hz tone in one channel reads " + juce::String (l.get(), 2) + " LUFS (expect -23.0)");
+    }
+
+    std::cout << "Listen does not come back on" << std::endl;
+    {
+        SinglePluginProcessor p (std::make_unique<Scree>());
+        auto mp = p.getModuleParams();
+        mp[(size_t) Scree::pListen]->setValue (1.0f);
+        mp[(size_t) Scree::pSensitivity]->setValue (mp[(size_t) Scree::pSensitivity]->getSpec().toNorm (80.0f));
+        juce::MemoryBlock state; p.getStateInformation (state);
+
+        SinglePluginProcessor q (std::make_unique<Scree>());
+        q.setStateInformation (state.getData(), (int) state.getSize());
+        auto mq = q.getModuleParams();
+        check (mq[(size_t) Scree::pListen]->getReal() < 0.5f, "a project saved with Listen on reopens with it off");
+        check (std::abs (mq[(size_t) Scree::pSensitivity]->getReal() - 80.0f) < 0.01f, "the settings beside it still come back (Sensitivity 80)");
     }
 
     std::cout << "Integrated loudness" << std::endl;

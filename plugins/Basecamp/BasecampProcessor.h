@@ -11,7 +11,7 @@ namespace ps
     Host parameters are fixed: each slot owns bypass, solo and a pool of `poolSize` parameters.
     Whatever module sits in a slot has its parameters mapped onto that slot's pool, so automation
     belongs to the slot and the host's parameter list never changes. */
-class BasecampProcessor : public juce::AudioProcessor, public juce::ChangeBroadcaster
+class BasecampProcessor : public juce::AudioProcessor, public juce::ChangeBroadcaster, private juce::AsyncUpdater
 {
 public:
     static constexpr int numSlots = 12, poolSize = 48, rackVersion = 1;
@@ -66,6 +66,7 @@ private:
     juce::ValueTree saveSlot (int slot) const;
     void loadSlot (int slot, juce::ValueTree saved, bool notify);
     void refreshLatency();
+    void handleAsyncUpdate() override;
 
     std::array<ModuleSlot, numSlots> slots;
     std::array<SlotParams, numSlots> hostParams;

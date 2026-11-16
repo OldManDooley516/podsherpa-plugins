@@ -9,9 +9,7 @@ namespace ps
     the target, a 200 ms hold after the voice drops below the silence level, and a look-ahead
     delay on the audio.
 
-    Differences from the JSFX: the look-ahead time is read when playback is prepared, so a
-    change to it takes effect at the next start (the JSFX changes it live). Not carried over
-    yet: "Learn my voice", the gain history display, the factory presets as a menu and the clip
+    Not carried over yet: "Learn my voice", the gain history display, the factory presets as a menu and the clip
     lamps. The JSFX's "Output trim" slider is not ported because the JSFX never applies it.
     Input and output gain and the bypass crossfade are handled by the shared core. */
 class Altitude : public Module
@@ -32,6 +30,7 @@ public:
     juce::String getSubtitle() const override { return "Voice leveler"; }
     int getVersion() const override { return 1; }
     int getLatencySamples() const override { return delaySamples; }
+    int getMaxLatencySamples() const override { return juce::jmax (0, bufLen - 1); }
     juce::String getModuleMeterLabel() const override { return "Ride gain"; }
     float readModuleMeter() override { return shownGain.load (std::memory_order_relaxed); }
 
@@ -57,6 +56,9 @@ public:
         const double target = getParam (pTarget), silence = getParam (pSilence), maxBoost = getParam (pMaxBoost), maxCut = getParam (pMaxCut),
                      soft = getParam (pSoft), loud = getParam (pLoud);
         const double riseStep = (double) getParam (pRise) / sampleRate, fallStep = (double) getParam (pFall) / sampleRate;
+        // The look-ahead follows the control while playing, as it does in the JSFX. The buffer is
+        // already as long as the longest look-ahead, so only the read position moves.
+        delaySamples = juce::jmin (bufLen - 1, (int) std::floor (sampleRate * (double) getParam (pLookahead) * 0.001 + 0.5));
         const double ln10 = std::log (10.0), mixStep = 1.0 / (0.05 * sampleRate);
         double actual = 0.0;
         for (int i = 0; i < n; ++i)

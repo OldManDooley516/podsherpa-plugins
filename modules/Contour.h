@@ -42,6 +42,7 @@ public:
     juce::String getSubtitle() const override { return "Voice EQ"; }
     int getVersion() const override { return 1; }
     int getLatencySamples() const override { return linear ? LinearPhase::latency : 0; }
+    int getMaxLatencySamples() const override { return LinearPhase::latency; }
 
     void prepare (double sr, int, int channels) override
     {
@@ -59,6 +60,14 @@ public:
     void process (juce::AudioBuffer<float>& b) override
     {
         const int n = b.getNumSamples(), nc = juce::jmin (b.getNumChannels(), numChannels);
+        // Phase follows the control while playing. Both paths are always prepared, so the
+        // switch only clears the state the other one left behind; the host is told about the
+        // latency change by the plugin wrapper.
+        if (const bool wantLinear = getParam (pPhase) >= 0.5f; wantLinear != linear)
+        {
+            linear = wantLinear; fir.reset(); lastCheck = -1.0;
+            for (auto& z : state) z.fill (0.0);
+        }
         const double al = 1.0 - std::exp (-(double) n / (sampleRate * 0.015));
         for (int i = 0; i < 18; ++i) sm[i] += ((double) getParam (i) - sm[i]) * al;
         sm[1] = getParam (pHpSlope);

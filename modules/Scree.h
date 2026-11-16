@@ -27,7 +27,7 @@ public:
     enum { pSensitivity, pLongest, pListen };
     Scree() : Module ({ ParamSpec::number ("sensitivity", "Sensitivity", "%", 0.0f, 100.0f, 50.0f, false, 0),
                         ParamSpec::number ("longest", "Longest click", "ms", 0.2f, 3.0f, 1.5f),
-                        ParamSpec::toggle ("listen", "Listen to what's removed", false) }) {}
+                        ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved() }) {}
     juce::String getModuleId() const override { return "scree"; }
     juce::String getDisplayName() const override { return "Scree"; }
     juce::String getSubtitle() const override { return "Click remover"; }
