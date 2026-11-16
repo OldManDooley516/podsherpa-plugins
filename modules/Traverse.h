@@ -82,6 +82,15 @@ public:
         return p;
     }
 
+    int getNumFactoryPresets() const override { return (int) factoryPresets().size(); }
+    juce::String getFactoryPresetName (int i) const override { return factoryPresets()[(size_t) i].name; }
+    void applyFactoryPreset (int i) override
+    {
+        const auto& p = factoryPresets()[(size_t) i];
+        setParam (pThreshold, p.threshold); setParam (pRatio, p.ratio); setParam (pAttack, p.attack);
+        setParam (pRelease, p.release); setParam (pMakeup, p.makeup); setParam (pMix, p.mix);
+    }
+
 private:
     static double reduction (double level, double threshold, double ratio, double knee)
     {

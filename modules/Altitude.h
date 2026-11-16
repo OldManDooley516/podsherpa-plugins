@@ -105,6 +105,16 @@ public:
         return p;
     }
 
+    int getNumFactoryPresets() const override { return (int) factoryPresets().size(); }
+    juce::String getFactoryPresetName (int i) const override { return factoryPresets()[(size_t) i].name; }
+    void applyFactoryPreset (int i) override
+    {
+        const auto& p = factoryPresets()[(size_t) i];
+        setParam (pTarget, p.target); setParam (pSilence, p.silence); setParam (pMaxBoost, p.maxBoost);
+        setParam (pMaxCut, p.maxCut); setParam (pRise, p.rise); setParam (pFall, p.fall);
+        setParam (pSoft, p.soft); setParam (pLoud, p.loud); setParam (pLookahead, p.lookahead);
+    }
+
 private:
     struct Chan { std::vector<float> buf; double hp = 0.0, prev = 0.0; };
     std::vector<Chan> chans;

@@ -83,6 +83,14 @@ public:
         return p;   // preset names live in the JSFX text atlas; fill them in when the preset menu is built
     }
 
+    int getNumFactoryPresets() const override { return (int) factoryPresets().size(); }
+    juce::String getFactoryPresetName (int i) const override { return factoryPresets()[(size_t) i].name; }
+    void applyFactoryPreset (int i) override
+    {
+        const auto& p = factoryPresets()[(size_t) i];
+        setParam (pReduction, p.reduction); setParam (pSensitivity, p.sensitivity); setParam (pSmoothing, p.smoothing);
+    }
+
 private:
     static constexpr int N = 2048, hop = 512, ring = 4096, mask = ring - 1;
     static constexpr size_t bins = 1025;

@@ -114,6 +114,14 @@ public:
         return p;
     }
 
+    int getNumFactoryPresets() const override { return (int) factoryPresets().size(); }
+    juce::String getFactoryPresetName (int i) const override { return factoryPresets()[(size_t) i].name; }
+    void applyFactoryPreset (int i) override
+    {
+        const auto& p = factoryPresets()[(size_t) i];
+        setParam (pSensitivity, p.sensitivity); setParam (pLongest, p.longest);
+    }
+
 private:
     static constexpr int ring = 4096, mask = ring - 1, order = 32, before = 3, after = 6;
     static constexpr double ratio = 2.0;   // how far a click's spike must stand above its neighbours

@@ -40,6 +40,13 @@ public:
         after it cannot break that promise. Default: the full range of the output gain control. */
     virtual float getMaxOutputGainDb() const { return 18.0f; }
 
+    /** Factory presets, the ones the JSFX offers. Applying one sets the parameters that preset
+        covers and leaves the rest (Phase, Listen, the band on/off switches) where they are, the
+        way picking a preset in the JSFX does. */
+    virtual int getNumFactoryPresets() const { return 0; }
+    virtual juce::String getFactoryPresetName (int) const { return {}; }
+    virtual void applyFactoryPreset (int) {}
+
     /** Upgrade a saved SLOT/MODULE tree written by an older version of this module. */
     virtual juce::ValueTree migrate (juce::ValueTree saved, int /*fromVersion*/) { return saved; }
 

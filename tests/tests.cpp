@@ -164,6 +164,46 @@ int main (int argc, char** argv)
         check (m->getNumParams() <= 50, info.name + ": fits a Basecamp slot (50 parameters)");
     }
 
+    std::cout << "Factory presets" << std::endl;
+    for (auto& info : moduleRegistry())
+    {
+        auto m = info.create();
+        const int n = m->getNumFactoryPresets(), np = m->getNumParams();
+        const auto& specs = m->getParamSpecs();
+        check (n > 0 && m->getFactoryPresetName (0) == "Default", info.name + ": offers " + juce::String (n) + " presets, the first called Default");
+
+        // Put every parameter somewhere it is not, then ask for Default. Whatever the preset
+        // covers must land exactly on that parameter's default; anything else must be untouched.
+        // A field wired to the wrong parameter shows up as neither.
+        std::vector<float> odd ((size_t) np);
+        for (int k = 0; k < np; ++k) { odd[(size_t) k] = specs[(size_t) k].fromNorm (0.37f); m->setParam (k, odd[(size_t) k]); }
+        m->applyFactoryPreset (0);
+        juce::StringArray wrong, untouched;
+        for (int k = 0; k < np; ++k)
+        {
+            const auto& s = specs[(size_t) k]; const float v = m->getParam (k);
+            if (std::abs (v - s.def) <= 1.0e-4f) continue;
+            (std::abs (v - odd[(size_t) k]) <= 1.0e-4f ? untouched : wrong).add (s.id);
+        }
+        check (wrong.isEmpty(), info.name + ": Default restores the parameters it covers"
+               + (wrong.isEmpty() ? (untouched.isEmpty() ? juce::String()
+                                                         : " (leaves " + untouched.joinIntoString (", ") + " alone)")
+                                  : "; wrong: " + wrong.joinIntoString (", ")));
+
+        // Every preset must leave the module making sane audio.
+        bool allFine = true;
+        for (int i = 0; i < n; ++i)
+        {
+            m->applyFactoryPreset (i); m->prepare (sr, block, 2); m->reset();
+            auto b = sine (sr, 12000, 220.0, 0.5f);
+            runBlocks (b, block, [&] (auto& v) { m->process (v); });
+            const float pk = b.getMagnitude (0, 12000);
+            for (int s2 = 0; s2 < 12000; ++s2) if (! std::isfinite (b.getSample (0, s2))) allFine = false;
+            if (! (pk > 0.0001f && pk < 4.0f)) allFine = false;
+        }
+        check (allFine, info.name + ": all " + juce::String (n) + " presets pass audio");
+    }
+
     std::cout << "Slot bypass" << std::endl;
     {
         ModuleSlot slot; slot.setModule (std::make_unique<Summit>()); slot.prepare (sr, block, 2);

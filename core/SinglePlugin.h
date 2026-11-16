@@ -35,10 +35,23 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return "Default"; }
+    // The module's factory presets, offered to the host as programs: REAPER lists them in the
+    // FX window's preset menu, beside any the user saves there.
+    int getNumPrograms() override { return juce::jmax (1, module->getNumFactoryPresets()); }
+    int getCurrentProgram() override { return program; }
+    void setCurrentProgram (int index) override
+    {
+        if (index < 0 || index >= module->getNumFactoryPresets()) return;
+        program = index;
+        module->applyFactoryPreset (index);
+        // The values have to reach the host parameters, or the next block overwrites them again.
+        const auto& specs = module->getParamSpecs();
+        for (size_t i = 0; i < params.size(); ++i) params[i]->setValueNotifyingHost (specs[i].toNorm (module->getParam ((int) i)));
+    }
+    const juce::String getProgramName (int index) override
+    {
+        return index >= 0 && index < module->getNumFactoryPresets() ? module->getFactoryPresetName (index) : juce::String ("Default");
+    }
     void changeProgramName (int, const juce::String&) override {}
     juce::AudioProcessorParameter* getBypassParameter() const override { return bypass; }
     bool isBusesLayoutSupported (const BusesLayout& l) const override
@@ -127,6 +140,7 @@ private:
     std::vector<HostParam*> params;
     float lastIn = -1000.0f, lastOut = -1000.0f;
     std::atomic<int> reported { 0 };
+    int program = 0;
 };
 
 /** Plain first-pass editor: side rails (In left, Out right), power button top right, footer. */

@@ -121,6 +121,14 @@ public:
         return p;   // preset names live in the JSFX text atlas; fill them in when the preset menu is built
     }
 
+    int getNumFactoryPresets() const override { return (int) factoryPresets().size(); }
+    juce::String getFactoryPresetName (int i) const override { return factoryPresets()[(size_t) i].name; }
+    void applyFactoryPreset (int i) override
+    {
+        const auto& p = factoryPresets()[(size_t) i];
+        for (int k = 0; k < 18; ++k) setParam (k, p.v[k]);
+    }
+
 private:
     static constexpr int maxChannels = 8;
     using Coef = std::array<double, 5>;

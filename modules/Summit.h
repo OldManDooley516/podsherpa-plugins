@@ -133,6 +133,15 @@ public:
         return p;
     }
 
+    int getNumFactoryPresets() const override { return (int) factoryPresets().size(); }
+    juce::String getFactoryPresetName (int i) const override { return factoryPresets()[(size_t) i].name; }
+    void applyFactoryPreset (int i) override
+    {
+        const auto& p = factoryPresets()[(size_t) i];
+        setParam (pThreshold, p.threshold); setParam (pCeiling, p.ceiling); setParam (pSpeed, p.speed);
+        setParam (pMode, (float) p.mode); setParam (pTruePeak, p.truePeak ? 1.0f : 0.0f);
+    }
+
 private:
     static constexpr int maxChannels = 8;
     // Warm: unity gain for small signals, rounds off peaks. Sits ahead of the limiter.

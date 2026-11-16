@@ -110,6 +110,14 @@ public:
         return p;
     }
 
+    int getNumFactoryPresets() const override { return (int) factoryPresets().size(); }
+    juce::String getFactoryPresetName (int i) const override { return factoryPresets()[(size_t) i].name; }
+    void applyFactoryPreset (int i) override
+    {
+        const auto& p = factoryPresets()[(size_t) i];
+        setParam (pFreq, p.freq); setParam (pSlope, (float) p.slope);
+    }
+
 private:
     static constexpr int maxChannels = 8, ring = 4096, ringMask = ring - 1;
     using Coefs = std::array<std::array<double, 5>, 4>;
