@@ -16,12 +16,14 @@ namespace ps
 class Summit : public Module
 {
 public:
-    enum { pThreshold, pCeiling, pSpeed, pMode, pTruePeak };
+    enum { pThreshold, pCeiling, pSpeed, pMode, pTruePeak, pTarget };
     Summit() : Module ({ ParamSpec::number ("threshold", "Threshold", "dB", -24.0f, 0.0f, -3.0f),
                          ParamSpec::number ("ceiling", "Ceiling", "dB", -12.0f, 0.0f, -1.0f),
                          ParamSpec::number ("speed", "Speed", "", 0.0f, 10.0f, 6.0f),          // 0 = slow, 10 = fast
                          ParamSpec::choice ("mode", "Mode", { "Clean", "Punch", "Warm" }, 0),
-                         ParamSpec::toggle ("truepeak", "True peak", true) }) {}
+                         ParamSpec::toggle ("truepeak", "True peak", true),
+                         ParamSpec::choice ("target", "Loudness target",
+                                            { "Off", "Podcast -16 LUFS", "Mono -19 LUFS", "Streaming -14 LUFS" }, 1) }) {}
     juce::String getModuleId() const override { return "summit"; }
     juce::String getDisplayName() const override { return "Summit"; }
     juce::String getSubtitle() const override { return "Limiter"; }
@@ -37,6 +39,12 @@ public:
         It does not include the shared wrapper's output gain. -120 until a 400 ms block has
         passed the absolute gate. */
     float getIntegratedLufs() const { return loudness.get(); }
+    /** The loudness the target asks for, or 0 when the target is Off. Nothing in the audio path
+        uses it; it is the mark the meter is read against, as in the JSFX. */
+    float getLoudnessTargetLufs() const
+    {
+        switch ((int) std::floor (getParam (pTarget) + 0.5f)) { case 1: return -16.0f; case 2: return -19.0f; case 3: return -14.0f; default: return 0.0f; }
+    }
     /** Starts the measurement again. Safe from any thread: the audio thread does the work. */
     void restartLoudness() { restart.store (true, std::memory_order_relaxed); }
 
@@ -118,7 +126,8 @@ public:
             apos = readPos; ++clock;
             blockMin = juce::jmin (blockMin, applied);
         }
-        loudness.process (b);
+        // Mono -19 LUFS reads the left channel alone, as the JSFX does.
+        loudness.process (b, (int) std::floor (getParam (pTarget) + 0.5f) == 2 ? 1 : -1);
         float old = minGain.load(); const float bm = (float) blockMin;
         while (bm < old && ! minGain.compare_exchange_weak (old, bm)) {}
     }

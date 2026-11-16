@@ -78,9 +78,9 @@ public:
     struct Preset { const char* name; float reduction, sensitivity, smoothing; };
     static const std::array<Preset, 6>& factoryPresets()
     {
-        static const std::array<Preset, 6> p { { { "Default", 12, 50, 50 }, { "Preset 1", 8, 40, 60 }, { "Preset 2", 14, 55, 55 },
-            { "Preset 3", 16, 60, 65 }, { "Preset 4", 22, 70, 65 }, { "Preset 5", 5, 30, 70 } } };
-        return p;   // preset names live in the JSFX text atlas; fill them in when the preset menu is built
+        static const std::array<Preset, 6> p { { { "Default", 12, 50, 50 }, { "Light Cleanup", 8, 40, 60 }, { "Room Tone Removal", 14, 55, 55 },
+            { "Remote Guest Cleanup", 16, 60, 65 }, { "Heavy Noise Rescue", 22, 70, 65 }, { "Quiet Room Polish", 5, 30, 70 } } };
+        return p;
     }
 
     int getNumFactoryPresets() const override { return (int) factoryPresets().size(); }

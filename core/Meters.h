@@ -175,9 +175,12 @@ public:
         ready = 0; count = 0; acc = 0.0;
         lufs.store (-120.0f);
     }
-    void process (const juce::AudioBuffer<float>& b)
+    /** `channels` limits how many channels are measured: 1 reads the left channel alone, which
+        is what the suite's Mono loudness target does. -1 measures them all. */
+    void process (const juce::AudioBuffer<float>& b, int channels = -1)
     {
-        const int nc = juce::jmin (b.getNumChannels(), kw.getNumChannels());
+        int nc = juce::jmin (b.getNumChannels(), kw.getNumChannels());
+        if (channels > 0) nc = juce::jmin (nc, channels);
         for (int n = 0; n < b.getNumSamples(); ++n)
         {
             for (int c = 0; c < nc; ++c) { const double y = kw.filter (c, (double) b.getSample (c, n)); acc += y * y; }
@@ -196,17 +199,20 @@ public:
     float get() const { return lufs.load(); }
 
 private:
+    // Binning follows the JSFX suite's own meter: 800 bins of 0.1 dB from -70 LUFS, and a bin
+    // counts toward the relative gate when its centre reaches it.
     static constexpr float absoluteGate = -70.0f;
-    static constexpr int numBins = 901;                                     // -70.0 to +20.0 LUFS
-    static int binOf (float l) { return juce::jlimit (0, numBins - 1, (int) std::lround ((l - absoluteGate) * 10.0f)); }
+    static constexpr int numBins = 800;                                     // -70.0 to +10.0 LUFS
+    static int binOf (float l) { return juce::jlimit (0, numBins - 1, (int) std::floor ((l - absoluteGate) * 10.0f)); }
     float gated() const
     {
         double sum = 0.0; juce::int64 n = 0;
         for (int i = 0; i < numBins; ++i) { sum += sums[(size_t) i]; n += bins[(size_t) i]; }
         if (n == 0) return -120.0f;
-        const float relative = loudnessOf (sum / (double) n) - 10.0f;
+        const double relative = (double) loudnessOf (sum / (double) n) - 10.0;
         double kept = 0.0; juce::int64 keptN = 0;
-        for (int i = juce::jmax (0, binOf (relative) + 1); i < numBins; ++i) { kept += sums[(size_t) i]; keptN += bins[(size_t) i]; }
+        for (int i = 0; i < numBins; ++i)
+            if ((double) i / 10.0 + (double) absoluteGate + 0.05 >= relative) { kept += sums[(size_t) i]; keptN += bins[(size_t) i]; }
         return keptN == 0 ? -120.0f : loudnessOf (kept / (double) keptN);
     }
     KWeighting kw;
