@@ -47,6 +47,13 @@ public:
     virtual juce::String getFactoryPresetName (int) const { return {}; }
     virtual void applyFactoryPreset (int) {}
 
+    /** A module that moves one of its own controls (Serac setting Frequency from what it just
+        learned) records it here; the wrapper passes it to the host and clears it. Only the first
+        32 parameters can be reported this way, which is every module in the suite. */
+    void noteSelfChanged (int i) { if (i < 32) selfChanged.fetch_or (1u << i, std::memory_order_relaxed); }
+    juce::uint32 peekSelfChanged() const { return selfChanged.load (std::memory_order_relaxed); }
+    juce::uint32 takeSelfChanged() { return selfChanged.exchange (0, std::memory_order_relaxed); }
+
     /** State a module keeps that is not a parameter: Clearing's learned noise profile. Saved
         with the project and handed back on load, the way the JSFX keeps it in @serialize. */
     virtual juce::ValueTree saveExtraState() const { return {}; }
@@ -63,6 +70,7 @@ public:
 private:
     std::vector<ParamSpec> specs;
     std::vector<std::atomic<float>> values;
+    std::atomic<juce::uint32> selfChanged { 0 };
 };
 
 /** Stands in for a module this build does not know. Passes audio through and keeps the

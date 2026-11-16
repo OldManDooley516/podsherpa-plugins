@@ -6,6 +6,7 @@
 #include "../modules/Dropoff.h"
 #include "../modules/Ridgeline.h"
 #include "../modules/Scree.h"
+#include "../modules/Serac.h"
 #include "../modules/Summit.h"
 #include "../modules/Traverse.h"
 #include <functional>
@@ -25,6 +26,7 @@ inline const std::vector<ModuleInfo>& moduleRegistry()
         { "dropoff", "Dropoff", [] { return std::unique_ptr<Module> (new Dropoff()); } },
         { "ridgeline", "Ridgeline", [] { return std::unique_ptr<Module> (new Ridgeline()); } },
         { "scree", "Scree", [] { return std::unique_ptr<Module> (new Scree()); } },
+        { "serac", "Serac", [] { return std::unique_ptr<Module> (new Serac()); } },
         { "summit",  "Summit",  [] { return std::unique_ptr<Module> (new Summit()); } },
         { "traverse", "Traverse", [] { return std::unique_ptr<Module> (new Traverse()); } },
     };

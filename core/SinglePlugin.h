@@ -79,13 +79,18 @@ public:
         outMeter.push (b);
         // A control that changes the module's latency (Phase, Altitude's look-ahead) is answered
         // on the message thread: telling the host from here is not safe in every host.
-        if (slot.getLatency() != reported.load (std::memory_order_relaxed)) triggerAsyncUpdate();
+        if (slot.getLatency() != reported.load (std::memory_order_relaxed) || module->peekSelfChanged() != 0) triggerAsyncUpdate();
     }
     void handleAsyncUpdate() override
     {
         const int lat = slot.getLatency();
-        reported.store (lat, std::memory_order_relaxed);
-        setLatencySamples (lat);
+        if (lat != reported.load (std::memory_order_relaxed)) { reported.store (lat, std::memory_order_relaxed); setLatencySamples (lat); }
+        if (const auto moved = module->takeSelfChanged(); moved != 0)
+        {
+            const auto& specs = module->getParamSpecs();
+            for (size_t i = 0; i < params.size() && i < 32; ++i)
+                if (moved & (1u << i)) params[i]->setValueNotifyingHost (specs[i].toNorm (module->getParam ((int) i)));
+        }
     }
     void getStateInformation (juce::MemoryBlock& dest) override
     {

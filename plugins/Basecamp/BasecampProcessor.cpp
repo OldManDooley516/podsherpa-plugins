@@ -241,6 +241,12 @@ void BasecampProcessor::processBlock (juce::AudioBuffer<float>& b, juce::MidiBuf
                 const auto& hp = hostParams[(size_t) s]; const auto& specs = m->getParamSpecs();
                 for (size_t k = 0; k < specs.size(); ++k) m->setParam ((int) k, specs[k].fromNorm (hp.pool[k]->getNorm()));
                 slot.process (b, hp.bypass->get() || (anySolo && ! hp.solo->get()));
+                // A module that moved one of its own controls (Serac's Learn) tells the host.
+                if (const auto moved = m->takeSelfChanged(); moved != 0)
+                {
+                    for (size_t k = 0; k < specs.size() && k < 32; ++k)
+                        if (moved & (1u << k)) hp.pool[k]->setValue (specs[k].toNorm (m->getParam ((int) k)));
+                }
             }
 
             // A module whose latency followed a control (Phase, a look-ahead time) changes the

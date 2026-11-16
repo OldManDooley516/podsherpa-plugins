@@ -273,6 +273,80 @@ int main (int argc, char** argv)
         check (std::abs (mq[(size_t) Scree::pSensitivity]->getReal() - 80.0f) < 0.01f, "the settings beside it still come back (Sensitivity 80)");
     }
 
+    std::cout << "Serac" << std::endl;
+    {
+        auto reduction = [&] (Serac& s, double freq, float amp, int samples = 24000)
+        {
+            s.reset();
+            auto b = sine (sr, samples, freq, amp);
+            runBlocks (b, block, [&] (auto& v) { s.process (v); });
+            return s.readModuleMeter();
+        };
+        Serac s; s.prepare (sr, block, 2);
+
+        const float onVowel = reduction (s, 300.0, 0.3f), onEss = reduction (s, 8000.0, 0.3f);
+        check (onVowel < 0.5f, "a 300 Hz vowel is left alone (" + juce::String (onVowel, 2) + " dB)");
+        check (onEss > 5.5f && onEss <= 6.01f, "8 kHz sibilance is pulled down to the 6 dB Range (" + juce::String (onEss, 2) + " dB)");
+
+        // The point of the design: the same setting does the same thing at any level.
+        const float loud = reduction (s, 8000.0, 0.5f), quiet = reduction (s, 8000.0, 0.005f);
+        check (std::abs (loud - quiet) < 0.2f, "and by the same amount 40 dB quieter (" + juce::String (loud, 2)
+               + " dB against " + juce::String (quiet, 2) + " dB)");
+
+        s.setParam (Serac::pRange, 12.0f);
+        const float wide = reduction (s, 8000.0, 0.3f);
+        s.setParam (Serac::pRange, 0.0f);
+        const float none = reduction (s, 8000.0, 0.3f);
+        check (wide > 11.0f && wide <= 12.01f && none < 0.01f, "Range is the ceiling on it: 12 gives "
+               + juce::String (wide, 2) + " dB, 0 gives none");
+
+        // Range 0 must leave the sound alone: the two halves of the crossover add back up flat.
+        // Measured as RMS, not peak: at 9 kHz there are only five samples per cycle, so the
+        // largest sample can sit 0.1 dB under the real crest and a peak reading would lie.
+        auto rmsDb = [] (const juce::AudioBuffer<float>& b, int start, int num)
+        {
+            double a = 0.0;
+            for (int i = 0; i < num; ++i) { const double v = b.getSample (0, start + i); a += v * v; }
+            return 20.0 * std::log10 (std::sqrt (a / num) + 1.0e-30);
+        };
+        s.setParam (Serac::pRange, 0.0f);
+        float worst = 0.0f;
+        for (double f : { 200.0, 1000.0, 5000.0, 9000.0 })
+        {
+            s.reset();
+            auto b = sine (sr, 24000, f, 0.4f);
+            const float before = (float) rmsDb (b, 12000, 12000);
+            runBlocks (b, block, [&] (auto& v) { s.process (v); });
+            worst = juce::jmax (worst, std::abs ((float) rmsDb (b, 12000, 12000) - before));
+        }
+        check (worst < 0.05f, "with Range at 0 the crossover adds back up flat from 200 Hz to 9 kHz (worst "
+               + juce::String (worst, 3) + " dB)");
+
+        s.setParam (Serac::pRange, 6.0f); s.setParam (Serac::pListen, 1.0f);
+        s.reset();
+        auto v = sine (sr, 24000, 300.0, 0.3f);
+        runBlocks (v, block, [&] (auto& w) { s.process (w); });
+        check (gainToDb (v.getMagnitude (12000, 12000)) < -60.0f, "Listen on a vowel is near silence: nothing is being taken out");
+        s.setParam (Serac::pListen, 0.0f);
+
+        // Learn: a voice-like tone with sibilance sitting between 7 and 10 kHz.
+        Serac l; l.prepare (sr, block, 2);
+        l.setParam (Serac::pLearn, 1.0f);
+        auto mix = sine (sr, (int) sr * 2, 200.0, 0.2f);
+        for (double f : { 7000.0, 8000.0, 9000.0, 10000.0 })
+        {
+            auto h = sine (sr, (int) sr * 2, f, 0.2f);
+            for (int c = 0; c < 2; ++c) for (int i = 0; i < mix.getNumSamples(); ++i)
+                mix.setSample (c, i, mix.getSample (c, i) + h.getSample (c, i));
+        }
+        runBlocks (mix, block, [&] (auto& w) { l.process (w); });
+        l.setParam (Serac::pLearn, 0.0f);
+        for (int k = 0; k < 3; ++k) { juce::AudioBuffer<float> q (2, block); q.clear(); l.process (q); }
+        const float found = l.getParam (Serac::pFreq);
+        check (found > 6000.0f && found < 8000.0f && ! l.isLearning(),
+               "Learn puts Frequency at the bottom of the sibilance it heard: " + juce::String (found, 0) + " Hz");
+    }
+
     std::cout << "Clearing learns a noise profile and keeps it" << std::endl;
     {
         SinglePluginProcessor p (std::make_unique<Clearing>());
