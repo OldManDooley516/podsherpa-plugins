@@ -3,7 +3,7 @@
 
 namespace ps
 {
-/** Gust: de-plosive.
+/** Gust: de-plosive. UNFINISHED - see "Where it stands" before trusting it on a deep voice.
 
      A "p" or "b" fires a puff of air at the microphone and lands as a short,
     heavy thump low down, usually under 200 Hz and lasting 10 to 80 ms. Scree cannot help with
@@ -47,35 +47,44 @@ namespace ps
 
     Listen plays only what is being taken out.
 
-    Where it stands (Nov 17). On Sean's four test recordings it behaves: about 10 pops a minute
-    on BG Pepper, 1 on Tony Mormino, 1.4 on the sibilant voice, 128 on Joe Sinicrope, and it
-    finds 39 of 40 pops planted into real speech.
+    Where it stands (Nov 17, evening). UNFINISHED: do not use on a deep voice. On three of
+    Sean's four test recordings it behaves - about 10 pops a minute on BG Pepper, 1 on Tony
+    Mormino, 1.4 on the sibilant voice - and it finds 39 of 40 pops planted into real speech.
+    On Joe Sinicrope it fires 128 times a minute and is ducking his voice, not thumps.
 
-    That 128 a minute was written up as a fault on Nov 16, on the reasoning that no recording has
-    two pops a second and that Sinicrope's deep, closely miked voice - some 32 dB more energy
-    under 50 Hz than the others, fundamental sitting under the split - must be reading its own
-    syllables as pops. Sean then listened to what was being removed and heard thumps and clicks,
-    not voice. Measuring what is in the removed track bears him out and the earlier reading was
-    wrong:
+    This was written up three times in one day and the detour is worth recording, because the
+    mistake in the middle is an easy one to repeat.
 
-      - Nothing removed is voice-length. Of 211 removed events in a minute of Sinicrope, 68 are
-        under 10 ms and 143 are 10-80 ms; none exceed 80 ms. A syllable is 100-300 ms, so if the
-        detector were taking the bottom of his voice the removed track would be full of events
-        in that range, and it holds none. BG Pepper's removed track has the same shape, 14 and 27
-        in those two bins and none above.
-      - The two recordings differ in amount and level, not in kind. Sinicrope's minute holds 112
-        events peaking at -5.8 dBFS, 16 dB under his voice. BG Pepper's holds 4, peaking at
-        -39.6 dBFS, 52 dB under the voice - which is why Sean heard nothing there, correctly.
-      - It fits the hand-repair record. Sinicrope is the recording Sean de-clicked most heavily,
-        60 clips. He was fixing what he could see at full bandwidth; Gust is finding low-frequency
-        impulsive hits that need not look like clicks in an editor, so the 10-a-minute he repaired
-        by hand and the 128 Gust reports are not the same population and do not contradict.
+    Nov 16: called a fault, reasoning that no recording has two pops a second and that
+    Sinicrope's deep, closely miked voice - 32 dB more energy under 50 Hz than the others, with
+    its fundamental under the split - must be reading its own syllables as pops.
 
-    So Sinicrope is a dirty recording rather than a detector failure, and the count it reports can
-    be believed. One thing the measurement does raise: a third of what Gust catches is under 10 ms,
-    which is Scree's territory rather than a plosive's. It is being removed correctly either way,
-    but Gust and Scree will both fire on those events if they are run in series, so the chain
-    presets should not lean on both for the same material.
+    Nov 17 morning: reversed, because Sean listened to the removed track and heard "bumps and
+    clicks, not voice", and because no removed event was longer than 80 ms while a syllable is
+    100-300 ms. Both observations were real. Neither meant what was concluded from them.
+
+    Nov 17 evening: reversed back, with the arithmetic that settles it. Sinicrope's pitch is
+    98 Hz, so his vocal folds produce one sharp pulse every 10.2 ms. The gap between the events
+    Gust acts on has a median of 9.8 ms. The detector is locked to his pitch: it is firing once
+    per glottal pulse, which is why no event reaches 80 ms - a pitch period is 10 ms, so events
+    cannot be longer whether they are pops or voice. The 80 ms test could never have separated
+    the two, and the pitch period is the test that does.
+
+    An isolated glottal pulse sounds like a click, and a train of them sounds like a buzz, so
+    "bumps and clicks" was an honest description of a voice with its vocal tract stripped away.
+    Played back at a fair level the removed track is recognisably Sinicrope speaking, with the
+    high end missing: Gust is taking the bottom of his voice.
+
+    The lesson, which cost most of a day: when a measurement and a listening test disagree,
+    neither wins by default. Find the third test that explains both. Here it was one division.
+
+    What it needs is what was already written on Nov 16 and then abandoned: the split has to sit
+    under the speaker's fundamental, which means tracking their pitch rather than trusting a
+    fixed 120 Hz. Serac's Learn solves the same shape of problem for sibilance. Until then this
+    is a draft, safe on ordinary voices and wrong on deep ones.
+
+    The test for any fix: the median gap between events must stop matching the speaker's pitch
+    period. 9.8 ms against a 10.2 ms period is a failure; no relationship is a pass.
 
     Not built yet: the suite interface. */
 class Gust : public Module
