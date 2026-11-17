@@ -97,9 +97,9 @@ public:
         g.fillAll (theme.bg);
         auto r = getLocalBounds();
         auto head = r.removeFromTop (headerH).reduced (24, 0);
-        g.setColour (theme.text); g.setFont (type::font (type::title, true));
+        g.setColour (theme.text); g.setFont (type::titleFont (type::title));
         g.drawText ("PodSherpa Basecamp", head, juce::Justification::centredLeft);
-        const int tw = juce::GlyphArrangement::getStringWidthInt (type::font (type::title, true), "PodSherpa Basecamp");
+        const int tw = juce::GlyphArrangement::getStringWidthInt (type::titleFont (type::title), "PodSherpa Basecamp");
         g.setColour (theme.dim); g.setFont (type::font (type::subtitle, true));
         g.drawText ("Master rack", head.withTrimmedLeft (tw + 16), juce::Justification::centredLeft);
 

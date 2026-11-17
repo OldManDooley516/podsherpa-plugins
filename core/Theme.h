@@ -1,5 +1,6 @@
 #pragma once
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <BinaryData.h>
 
 namespace ps
 {
@@ -166,13 +167,44 @@ namespace type
     constexpr float support  = 14.0f;
     constexpr float footer   = 13.0f;
 
-    /** Pre-rendered Montserrat/Manrope atlases are not in the C++ build yet, so this is JUCE's
-        own font for now. The standard requires the suite not to depend on installed fonts, which
-        means these calls get swapped for atlas lookups before release; keeping every size behind
-        one function is what makes that a contained change. */
+    /** The suite's faces, compiled into the binary rather than looked up by name, so a machine
+        without Montserrat and Manrope installed still draws the interface correctly. That is the
+        standard's requirement; assets/fonts/README.md says why these are embedded outlines here
+        and pre-rendered atlases in the JSFX versions, which cannot carry a font at all.
+
+        Loaded once on first use and held for the life of the process. If a face somehow fails to
+        load, the Font falls back to the host's default rather than drawing nothing. */
+    namespace detail
+    {
+        /** JUCE already caches by the data pointer, so this does not keep a cache of its own.
+            An earlier version did, as a static std::map of Typeface::Ptr, and it crashed every
+            process on exit: the map outlived JUCE's own typeface cache and released its
+            references after that cache had been destroyed. Inside a DAW that is a crash on quit,
+            which is both alarming and hard to trace back to a font. */
+        inline juce::Typeface::Ptr load (const void* data, int size)
+        {
+            return juce::Typeface::createSystemTypefaceFor (data, (size_t) size);
+        }
+
+        inline juce::Font make (juce::Typeface::Ptr tf, float size)
+        {
+            if (tf == nullptr) return juce::Font (juce::FontOptions (size, juce::Font::plain));
+            return juce::Font (juce::FontOptions (tf).withHeight (size));
+        }
+    }
+
+    /** Manrope: Medium for labels and supporting text, SemiBold for values and anything bold. */
     inline juce::Font font (float size, bool bold = false)
     {
-        return juce::Font (juce::FontOptions (size, bold ? juce::Font::bold : juce::Font::plain));
+        return detail::make (detail::load (bold ? BinaryData::ManropeSemiBold_ttf : BinaryData::ManropeMedium_ttf,
+                                           bold ? BinaryData::ManropeSemiBold_ttfSize : BinaryData::ManropeMedium_ttfSize),
+                             size);
+    }
+
+    /** Montserrat SemiBold: the plugin title only. */
+    inline juce::Font titleFont (float size)
+    {
+        return detail::make (detail::load (BinaryData::MontserratSemiBold_ttf, BinaryData::MontserratSemiBold_ttfSize), size);
     }
 }
 } // namespace ps

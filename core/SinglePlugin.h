@@ -274,10 +274,10 @@ public:
 
         // Header: name, type and version on the left. The version sits in a knocked-out box.
         g.setColour (theme.text);
-        g.setFont (type::font (type::title, true));
+        g.setFont (type::titleFont (type::title));
         const auto title = "PodSherpa " + proc.getModule().getDisplayName();
         g.drawText (title, titleArea, juce::Justification::centredLeft);
-        const int tw = juce::GlyphArrangement::getStringWidthInt (type::font (type::title, true), title);
+        const int tw = juce::GlyphArrangement::getStringWidthInt (type::titleFont (type::title), title);
 
         auto after = titleArea.withTrimmedLeft (tw + 16);
         g.setColour (theme.dim);
@@ -397,7 +397,7 @@ private:
     int headerLeftWidth() const
     {
         const auto title = "PodSherpa " + proc.getModule().getDisplayName();
-        int w = juce::GlyphArrangement::getStringWidthInt (type::font (type::title, true), title) + 16;
+        int w = juce::GlyphArrangement::getStringWidthInt (type::titleFont (type::title), title) + 16;
         w += juce::GlyphArrangement::getStringWidthInt (type::font (type::subtitle, true), proc.getModule().getSubtitle());
         return w + 12 + 54;   // gap plus the version chip
     }

@@ -181,11 +181,20 @@ public:
 
         auto body = getLocalBounds();
         auto l = body.removeFromLeft (arrowW), rr = body.removeFromRight (arrowW);
-        g.setColour (canStep (-1) ? faceTextDim (theme) : theme.line);
-        g.setFont (type::font (type::label, true));
-        g.drawText ("<", l, juce::Justification::centred);
-        g.setColour (canStep (1) ? faceTextDim (theme) : theme.line);
-        g.drawText (">", rr, juce::Justification::centred);
+        // Drawn rather than typed: the angle brackets in Manrope sit high and read as
+        // punctuation beside the preset name, not as controls.
+        auto arrow = [&g] (juce::Rectangle<int> box, int dir, juce::Colour c)
+        {
+            auto b = box.toFloat().withSizeKeepingCentre (9.0f, 14.0f);
+            juce::Path p;
+            p.startNewSubPath (dir > 0 ? b.getX() : b.getRight(), b.getY());
+            p.lineTo (dir > 0 ? b.getRight() : b.getX(), b.getCentreY());
+            p.lineTo (dir > 0 ? b.getX() : b.getRight(), b.getBottom());
+            g.setColour (c);
+            g.strokePath (p, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        };
+        arrow (l,  -1, canStep (-1) ? faceTextDim (theme) : theme.line);
+        arrow (rr,  1, canStep (1)  ? faceTextDim (theme) : theme.line);
 
         g.setColour (faceText (theme));
         g.setFont (type::font (type::label));

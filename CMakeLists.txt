@@ -21,6 +21,14 @@ endif()
 
 set(PS_DEFS JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
 
+# The suite's three faces, compiled into every binary so nothing depends on what is installed on
+# the listener's machine. Both families are SIL OFL 1.1, which allows this; see assets/fonts.
+juce_add_binary_data(ps_fonts SOURCES
+    assets/fonts/Montserrat-SemiBold.ttf
+    assets/fonts/Manrope-Medium.ttf
+    assets/fonts/Manrope-SemiBold.ttf)
+set_target_properties(ps_fonts PROPERTIES POSITION_INDEPENDENT_CODE TRUE)
+
 # ps_plugin(<target> <product name> <4-char code> <VST3 category> <sources...>)
 function(ps_plugin target name code category)
     juce_add_plugin(${target}
@@ -39,7 +47,7 @@ function(ps_plugin target name code category)
     target_sources(${target} PRIVATE ${ARGN})
     target_compile_definitions(${target} PUBLIC ${PS_DEFS})
     target_link_libraries(${target}
-        PRIVATE juce::juce_audio_processors juce::juce_gui_basics
+        PRIVATE ps_fonts juce::juce_audio_processors juce::juce_gui_basics
         PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_lto_flags)
 endfunction()
 
@@ -62,13 +70,13 @@ juce_add_console_app(ps_tests PRODUCT_NAME "ps_tests")
 target_sources(ps_tests PRIVATE tests/tests.cpp
     plugins/Basecamp/BasecampProcessor.cpp plugins/Basecamp/BasecampEditor.cpp)
 target_compile_definitions(ps_tests PRIVATE ${PS_DEFS})
-target_link_libraries(ps_tests PRIVATE juce::juce_audio_processors juce::juce_gui_basics juce::juce_recommended_config_flags)
+target_link_libraries(ps_tests PRIVATE ps_fonts juce::juce_audio_processors juce::juce_gui_basics juce::juce_recommended_config_flags)
 # Renders a plugin editor to a PNG with no window and no host, for looking at the interface on a
 # machine with no screen. A development tool: it checks layout and contrast, not host behaviour.
 juce_add_console_app(ps_shot PRODUCT_NAME "ps_shot")
 target_sources(ps_shot PRIVATE tests/shot.cpp)
 target_compile_definitions(ps_shot PRIVATE ${PS_DEFS})
-target_link_libraries(ps_shot PRIVATE juce::juce_audio_processors juce::juce_gui_basics
+target_link_libraries(ps_shot PRIVATE ps_fonts juce::juce_audio_processors juce::juce_gui_basics
     juce::juce_graphics juce::juce_recommended_config_flags)
 
 # Runs one module over a raw audio file, for checking a port against the original JSFX

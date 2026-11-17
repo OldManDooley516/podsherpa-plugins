@@ -518,6 +518,27 @@ int main (int argc, char** argv)
         }
         check (tooLong == 0, "captions are short enough to fit one line");
 
+        // The three faces must come from the binary, not from whatever is installed. If a load
+        // silently failed, type::font would fall back to the host default and the interface
+        // would still draw - just in the wrong face, on machines Sean cannot see.
+        {
+            struct { juce::Typeface::Ptr tf; const char* want; } faces[] {
+                { juce::Typeface::createSystemTypefaceFor (BinaryData::MontserratSemiBold_ttf, (size_t) BinaryData::MontserratSemiBold_ttfSize), "Montserrat" },
+                { juce::Typeface::createSystemTypefaceFor (BinaryData::ManropeMedium_ttf,      (size_t) BinaryData::ManropeMedium_ttfSize),      "Manrope" },
+                { juce::Typeface::createSystemTypefaceFor (BinaryData::ManropeSemiBold_ttf,    (size_t) BinaryData::ManropeSemiBold_ttfSize),    "Manrope" },
+            };
+            bool allLoaded = true;
+            for (auto& f : faces)
+                allLoaded = allLoaded && f.tf != nullptr && f.tf->getName().contains (f.want);
+            check (allLoaded, "all three faces load from the binary, not from installed fonts");
+            check (type::titleFont (28.0f).getTypefacePtr() != nullptr
+                       && type::titleFont (28.0f).getTypefacePtr()->getName().contains ("Montserrat"),
+                   "the plugin title is Montserrat");
+            check (type::font (17.0f).getTypefacePtr() != nullptr
+                       && type::font (17.0f).getTypefacePtr()->getName().contains ("Manrope"),
+                   "labels are Manrope");
+        }
+
         // Vintage is a bonus look: never saved, never the opening look.
         auto& ss = SuiteSettings::get();
         const auto before = ss.look();
