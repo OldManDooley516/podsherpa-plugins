@@ -23,12 +23,13 @@ class Clearing : public Module
 {
 public:
     enum { pReduction, pSensitivity, pSmoothing, pSource, pListen, pLearn };
-    Clearing() : Module ({ ParamSpec::number ("reduction", "Reduction", "dB", 0.0f, 30.0f, 12.0f),
-                           ParamSpec::number ("sensitivity", "Sensitivity", "%", 0.0f, 100.0f, 50.0f, false, 0),
-                           ParamSpec::number ("smoothing", "Smoothing", "%", 0.0f, 100.0f, 50.0f, false, 0),
-                           ParamSpec::choice ("source", "Noise source", { "Auto", "Learned" }, 0),
-                           ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved(),
-                           ParamSpec::toggle ("learn", "Learn noise", false).notSaved() }), fft (N)
+    Clearing() : Module ({ ParamSpec::number ("reduction", "Reduction", "dB", 0.0f, 30.0f, 12.0f).says ("How far the background noise comes down. Less is usually safer than more."),
+                           ParamSpec::number ("sensitivity", "Sensitivity", "%", 0.0f, 100.0f, 50.0f, false, 0).says ("How sure it has to be that something is noise before it removes it."),
+                           ParamSpec::number ("smoothing", "Smoothing", "%", 0.0f, 100.0f, 50.0f, false, 0).says ("Smooths the result. More avoids a watery, underwater sound; too much dulls the voice."),
+                           ParamSpec::choice ("source", "Noise source", { "Auto", "Learned" }, 0).says ("Where its idea of the noise comes from."),
+                           ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved().says ("Play only what is being removed. It should sound like room tone, not like words."),
+                           ParamSpec::toggle ("learn", "Learn noise", false).notSaved()
+                               .says ("Hold this on over a few seconds of room tone with nobody talking, and it learns that room.") }), fft (N)
     {
         const double pi = juce::MathConstants<double>::pi;
         for (int i = 0; i < N; ++i) wn[(size_t) i] = 0.5 - 0.5 * std::cos (2.0 * pi * i / N);

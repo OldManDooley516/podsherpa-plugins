@@ -82,10 +82,10 @@ class Gust : public Module
 {
 public:
     enum { pSensitivity, pFreq, pRange, pListen };
-    Gust() : Module ({ ParamSpec::number ("sensitivity", "Sensitivity", "%", 0.0f, 100.0f, 50.0f, false, 0),
-                       ParamSpec::number ("freq", "Frequency", "Hz", 40.0f, 250.0f, 120.0f, true, 0),
-                       ParamSpec::number ("range", "Range", "dB", 0.0f, 24.0f, 12.0f),
-                       ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved() }) {}
+    Gust() : Module ({ ParamSpec::number ("sensitivity", "Sensitivity", "%", 0.0f, 100.0f, 50.0f, false, 0).says ("How big a thump has to be before the low end is ducked."),
+                       ParamSpec::number ("freq", "Frequency", "Hz", 40.0f, 250.0f, 120.0f, true, 0).says ("The line a thump lives below. Raise it for a deep voice, lower it for a light one."),
+                       ParamSpec::number ("range", "Range", "dB", 0.0f, 24.0f, 12.0f).says ("The most it will ever duck the low end during a thump."),
+                       ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved() .says ("Play only what is being taken out. You should hear thumps, not the bottom of the voice.") }) {}
     juce::String getModuleId() const override { return "gust"; }
     juce::String getDisplayName() const override { return "Gust"; }
     juce::String getSubtitle() const override { return "De-plosive"; }

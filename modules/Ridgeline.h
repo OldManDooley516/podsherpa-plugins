@@ -132,22 +132,33 @@ private:
     static std::vector<ParamSpec> makeSpecs()
     {
         std::vector<ParamSpec> s {
-            ParamSpec::number ("xover1", "Crossover 1", "Hz", 60.0f, 400.0f, 150.0f, false, 0),
-            ParamSpec::number ("xover2", "Crossover 2", "Hz", 500.0f, 3500.0f, 1500.0f, false, 0),
-            ParamSpec::number ("xover3", "Crossover 3", "Hz", 3500.0f, 12000.0f, 6000.0f, false, 0) };
+            ParamSpec::number ("xover1", "Crossover 1", "Hz", 60.0f, 400.0f, 150.0f, false, 0)
+                .says ("Where the low band ends and the low-mid band begins."),
+            ParamSpec::number ("xover2", "Crossover 2", "Hz", 500.0f, 3500.0f, 1500.0f, false, 0)
+                .says ("Where the low-mid band ends and the high-mid band begins."),
+            ParamSpec::number ("xover3", "Crossover 3", "Hz", 3500.0f, 12000.0f, 6000.0f, false, 0)
+                .says ("Where the high-mid band ends and the high band begins.") };
         const char* ids[4] = { "low", "lowmid", "highmid", "high" };
         const char* names[4] = { "Low", "Low-mid", "High-mid", "High" };
         const float def[4][4] = { { -26, 2.5f, 15, 200 }, { -28, 2.5f, 10, 150 }, { -30, 2.5f, 8, 120 }, { -32, 2, 5, 100 } };
         for (int k = 0; k < 4; ++k)
         {
             const juce::String id (ids[k]), nm (names[k]);
-            s.push_back (ParamSpec::number (id + ".threshold", nm + " threshold", "dB", -60.0f, 0.0f, def[k][0]));
-            s.push_back (ParamSpec::number (id + ".ratio", nm + " ratio", ":1", 1.0f, 10.0f, def[k][1]));
-            s.push_back (ParamSpec::number (id + ".attack", nm + " attack", "ms", 1.0f, 100.0f, def[k][2], false, 0));
-            s.push_back (ParamSpec::number (id + ".release", nm + " release", "ms", 20.0f, 1000.0f, def[k][3], false, 0));
-            s.push_back (ParamSpec::number (id + ".makeup", nm + " makeup", "dB", -12.0f, 12.0f, 0.0f));
+            const juce::String b = nm.toLowerCase() + " band";
+            s.push_back (ParamSpec::number (id + ".threshold", nm + " threshold", "dB", -60.0f, 0.0f, def[k][0])
+                .says ("Where squeezing starts in the " + b + ". Lower works on more of it."));
+            s.push_back (ParamSpec::number (id + ".ratio", nm + " ratio", ":1", 1.0f, 10.0f, def[k][1])
+                .says ("How hard the " + b + " is squeezed once it starts."));
+            s.push_back (ParamSpec::number (id + ".attack", nm + " attack", "ms", 1.0f, 100.0f, def[k][2], false, 0)
+                .says ("How quickly the " + b + " clamps down."));
+            s.push_back (ParamSpec::number (id + ".release", nm + " release", "ms", 20.0f, 1000.0f, def[k][3], false, 0)
+                .says ("How quickly the " + b + " eases off again."));
+            s.push_back (ParamSpec::number (id + ".makeup", nm + " makeup", "dB", -12.0f, 12.0f, 0.0f)
+                .says ("Puts the level of the " + b + " back after squeezing."));
         }
-        for (int k = 0; k < 4; ++k) s.push_back (ParamSpec::toggle (juce::String (ids[k]) + ".on", juce::String (names[k]) + " band", true));
+        for (int k = 0; k < 4; ++k)
+            s.push_back (ParamSpec::toggle (juce::String (ids[k]) + ".on", juce::String (names[k]) + " band", true)
+                .says ("Turn the " + juce::String (names[k]).toLowerCase() + " band on or off."));
         return s;
     }
     // one LR4 filter = two identical Butterworth biquads in a row (4 state slots)

@@ -14,13 +14,13 @@ class Traverse : public Module
 {
 public:
     enum { pThreshold, pRatio, pAttack, pRelease, pKnee, pMakeup, pMix };
-    Traverse() : Module ({ ParamSpec::number ("threshold", "Threshold", "dB", -48.0f, 0.0f, -18.0f),
-                           ParamSpec::number ("ratio", "Ratio", ":1", 1.0f, 8.0f, 2.0f),
-                           ParamSpec::number ("attack", "Attack", "ms", 2.0f, 150.0f, 25.0f, false, 0),
-                           ParamSpec::number ("release", "Release", "ms", 40.0f, 1000.0f, 180.0f, false, 0),
-                           ParamSpec::number ("knee", "Knee", "dB", 0.0f, 18.0f, 6.0f),
-                           ParamSpec::number ("makeup", "Makeup", "dB", -18.0f, 18.0f, 0.0f),
-                           ParamSpec::number ("mix", "Mix", "%", 0.0f, 100.0f, 100.0f, false, 0) }) {}
+    Traverse() : Module ({ ParamSpec::number ("threshold", "Threshold", "dB", -48.0f, 0.0f, -18.0f).says ("Where it starts squeezing. Lower means more of the voice gets worked on."),
+                           ParamSpec::number ("ratio", "Ratio", ":1", 1.0f, 8.0f, 2.0f).says ("How hard it squeezes once it starts."),
+                           ParamSpec::number ("attack", "Attack", "ms", 2.0f, 150.0f, 25.0f, false, 0).says ("How quickly it clamps down. Fast tames hard consonants, slow lets them through."),
+                           ParamSpec::number ("release", "Release", "ms", 40.0f, 1000.0f, 180.0f, false, 0).says ("How quickly it eases off again once the voice drops back."),
+                           ParamSpec::number ("knee", "Knee", "dB", 0.0f, 18.0f, 6.0f).says ("How gently it eases in around the threshold. Softer is less noticeable."),
+                           ParamSpec::number ("makeup", "Makeup", "dB", -18.0f, 18.0f, 0.0f).says ("Puts the level back up after the squeezing has taken it down."),
+                           ParamSpec::number ("mix", "Mix", "%", 0.0f, 100.0f, 100.0f, false, 0) .says ("Blends the squeezed voice back with the untouched one. Lower keeps more of the original.") }) {}
     juce::String getModuleId() const override { return "traverse"; }
     juce::String getDisplayName() const override { return "Traverse"; }
     juce::String getSubtitle() const override { return "Speech compressor"; }

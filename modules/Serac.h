@@ -28,11 +28,11 @@ class Serac : public Module
 {
 public:
     enum { pSensitivity, pFreq, pRange, pLearn, pListen };
-    Serac() : Module ({ ParamSpec::number ("sensitivity", "Sensitivity", "%", 0.0f, 100.0f, 50.0f, false, 0),
-                        ParamSpec::number ("freq", "Frequency", "Hz", 2000.0f, 12000.0f, 6500.0f, true, 0),
-                        ParamSpec::number ("range", "Range", "dB", 0.0f, 18.0f, 6.0f),
-                        ParamSpec::toggle ("learn", "Learn the voice", false).notSaved(),
-                        ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved() }),
+    Serac() : Module ({ ParamSpec::number ("sensitivity", "Sensitivity", "%", 0.0f, 100.0f, 50.0f, false, 0).says ("How much of an 's' it takes to set this off. Higher acts on more words."),
+                        ParamSpec::number ("freq", "Frequency", "Hz", 2000.0f, 12000.0f, 6500.0f, true, 0).says ("Where the sibilance sits. Lower for a deep voice, higher for a bright one. Learn can find it for you."),
+                        ParamSpec::number ("range", "Range", "dB", 0.0f, 18.0f, 6.0f).says ("The most it will ever turn the sibilance down. This is what stops it lisping."),
+                        ParamSpec::toggle ("learn", "Learn the voice", false).notSaved().says ("Hold this on over a few seconds of the voice and it sets Frequency to where that person's sibilance actually is."),
+                        ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved().says ("Play only what is being taken out. You should hear esses, not whole words.") }),
               fft (fftSize) {}
     juce::String getModuleId() const override { return "serac"; }
     juce::String getDisplayName() const override { return "Serac"; }

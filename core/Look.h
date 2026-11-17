@@ -2,125 +2,150 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "HostParam.h"
 #include "Meters.h"
+#include "Theme.h"
+#include "SuiteSettings.h"
+#include "Chrome.h"
 
 namespace ps
 {
-/** Default look (navy / mint). Plain first pass: the full Look system, modes, pre-rendered
-    type and header layout A come after the plumbing is proven in a DAW. */
-namespace look
-{
-    const juce::Colour bg { 0xff0e1a30 }, panel { 0xff172742 }, panelHi { 0xff20355a }, line { 0xff2c4470 },
-                       text { 0xffeaf0fb }, dim { 0xffa9b8d4 }, mint { 0xff5eead4 }, blue { 0xff60a5fa },
-                       amber { 0xfffbbf24 }, red { 0xfff87171 };
-    inline juce::Font font (float size, bool bold = false)
-    {
-        return juce::Font (juce::FontOptions (size, bold ? juce::Font::bold : juce::Font::plain));
-    }
-    inline void footer (juce::Graphics& g, juce::Rectangle<int> r)
-    {
-        g.setColour (dim);
-        auto f = font (13.0f).withExtraKerningFactor (0.25f);
-        g.setFont (f);
-        g.drawText ("SOUTHERN DIGITAL", r, juce::Justification::centred);
-    }
-}
+/** The suite look-and-feel, driven by a Theme that can change while a plugin is open.
 
+    The first pass had one palette as a set of global consts, which cannot support three Looks and
+    a hidden fourth. The palette now arrives as a Theme and the colours are re-pushed on change. */
 class PsLookAndFeel : public juce::LookAndFeel_V4
 {
 public:
-    PsLookAndFeel()
+    explicit PsLookAndFeel (const Theme& t) { setTheme (t); }
+
+    void setTheme (const Theme& t)
     {
-        setColour (juce::ResizableWindow::backgroundColourId, look::bg);
-        setColour (juce::Slider::trackColourId, look::mint);
-        setColour (juce::Slider::thumbColourId, look::mint);
-        setColour (juce::Slider::backgroundColourId, look::line);
-        setColour (juce::Slider::textBoxTextColourId, look::text);
+        setColour (juce::ResizableWindow::backgroundColourId, t.bg);
+        setColour (juce::Slider::trackColourId, t.accent);
+        setColour (juce::Slider::thumbColourId, t.accent);
+        setColour (juce::Slider::backgroundColourId, t.line);
+        setColour (juce::Slider::textBoxTextColourId, t.text);
         setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
-        setColour (juce::Label::textColourId, look::text);
-        setColour (juce::ComboBox::backgroundColourId, look::panelHi);
-        setColour (juce::ComboBox::outlineColourId, look::line);
-        setColour (juce::ComboBox::textColourId, look::text);
-        setColour (juce::PopupMenu::backgroundColourId, look::panel);
-        setColour (juce::PopupMenu::textColourId, look::text);
-        setColour (juce::PopupMenu::highlightedBackgroundColourId, look::mint);
-        setColour (juce::PopupMenu::highlightedTextColourId, look::bg);
-        setColour (juce::TextButton::buttonColourId, look::panelHi);
-        setColour (juce::TextButton::buttonOnColourId, look::mint);
-        setColour (juce::TextButton::textColourOffId, look::text);
-        setColour (juce::TextButton::textColourOnId, look::bg);
-        setColour (juce::ToggleButton::textColourId, look::text);
-        setColour (juce::ToggleButton::tickColourId, look::mint);
+        setColour (juce::Label::textColourId, t.text);
+        setColour (juce::ComboBox::backgroundColourId, t.panelHi);
+        setColour (juce::ComboBox::outlineColourId, t.line);
+        setColour (juce::ComboBox::textColourId, t.silverButtons ? t.bg : t.text);
+        setColour (juce::ComboBox::arrowColourId, t.silverButtons ? t.bg : t.dim);
+        setColour (juce::PopupMenu::backgroundColourId, t.panel);
+        setColour (juce::PopupMenu::textColourId, t.text);
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, t.accent);
+        setColour (juce::PopupMenu::highlightedTextColourId, t.bg);
+        setColour (juce::TextButton::buttonColourId, t.panelHi);
+        setColour (juce::TextButton::buttonOnColourId, t.accent);
+        setColour (juce::TextButton::textColourOffId, t.silverButtons ? t.bg : t.text);
+        setColour (juce::TextButton::textColourOnId, t.bg);
+        setColour (juce::ToggleButton::textColourId, t.text);
+        setColour (juce::ToggleButton::tickColourId, t.accent);
+        setColour (juce::TooltipWindow::backgroundColourId, t.panel);
+        setColour (juce::TooltipWindow::textColourId, t.text);
+        setColour (juce::TooltipWindow::outlineColourId, t.line);
+        ribbed = t.ribbedFaders;
+        silver = t.silverButtons;
+        edge   = t.accent;
+        faceHi = t.panelHi;
+        lineCol = t.line;
     }
-    juce::Font getTextButtonFont (juce::TextButton&, int) override { return look::font (16.0f); }
-    juce::Font getComboBoxFont (juce::ComboBox&) override { return look::font (16.0f); }
-    juce::Font getPopupMenuFont() override { return look::font (16.0f); }
+
+    juce::Font getTextButtonFont (juce::TextButton&, int) override { return type::font (type::label); }
+    juce::Font getComboBoxFont (juce::ComboBox&) override { return type::font (type::label); }
+    juce::Font getPopupMenuFont() override { return type::font (type::label); }
     juce::Font getLabelFont (juce::Label& l) override { return l.getFont(); }
-};
 
-/** Vertical level meter with a latching clip light. Click the light to clear it. */
-class MeterBar : public juce::Component
-{
-public:
-    explicit MeterBar (LevelMeter& m) : meter (m) {}
-    void tick()
+    /** Vintage draws its faders ribbed, with a silver cap and a lit edge, rather than JUCE's
+        rounded thumb. The other Looks fall through to the stock drawing. */
+    void drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h,
+                           float pos, float min, float max,
+                           juce::Slider::SliderStyle style, juce::Slider& s) override
     {
-        const float db = gainToDb (meter.readPeak());
-        shown = juce::jmax (db, shown - 1.5f);
-        repaint();
+        if (! ribbed)
+        {
+            juce::LookAndFeel_V4::drawLinearSlider (g, x, y, w, h, pos, min, max, style, s);
+            return;
+        }
+        const bool vertical = style == juce::Slider::LinearVertical;
+        auto track = vertical ? juce::Rectangle<float> ((float) x + (float) w * 0.5f - 3.0f, (float) y, 6.0f, (float) h)
+                              : juce::Rectangle<float> ((float) x, (float) y + (float) h * 0.5f - 3.0f, (float) w, 6.0f);
+        g.setColour (lineCol);
+        g.fillRoundedRectangle (track, 3.0f);
+
+        auto cap = vertical ? juce::Rectangle<float> ((float) w - 8.0f, 20.0f).withCentre ({ (float) x + (float) w * 0.5f, pos })
+                            : juce::Rectangle<float> (20.0f, (float) h - 8.0f).withCentre ({ pos, (float) y + (float) h * 0.5f });
+        g.setColour (faceHi);
+        g.fillRoundedRectangle (cap, 3.0f);
+        g.setColour (edge);
+        g.drawRoundedRectangle (cap.reduced (0.5f), 3.0f, 1.4f);
+        g.setColour (lineCol.withAlpha (0.8f));
+        for (int i = 1; i <= 3; ++i)
+        {
+            const float f = (float) i / 4.0f;
+            if (vertical) g.drawHorizontalLine ((int) (cap.getY() + cap.getHeight() * f), cap.getX() + 3.0f, cap.getRight() - 3.0f);
+            else          g.drawVerticalLine   ((int) (cap.getX() + cap.getWidth()  * f), cap.getY() + 3.0f, cap.getBottom() - 3.0f);
+        }
     }
-    void paint (juce::Graphics& g) override
-    {
-        auto r = getLocalBounds();
-        auto lamp = r.removeFromTop (16).reduced (1);
-        g.setColour (meter.isClipped() ? look::red : look::line);
-        g.fillRoundedRectangle (lamp.toFloat(), 3.0f);
-        r.removeFromTop (4);
-        g.setColour (look::panelHi); g.fillRoundedRectangle (r.toFloat(), 3.0f);
-        const float frac = juce::jlimit (0.0f, 1.0f, (shown + 60.0f) / 60.0f);
-        auto fill = r.withTop (r.getBottom() - (int) (frac * (float) r.getHeight()));
-        g.setColour (shown > -1.0f ? look::amber : look::mint); g.fillRoundedRectangle (fill.toFloat(), 3.0f);
-    }
-    void mouseDown (const juce::MouseEvent&) override { meter.clearClip(); repaint(); }
+
 private:
-    LevelMeter& meter; float shown = -120.0f;
+    bool ribbed = false, silver = false;
+    juce::Colour edge, faceHi, lineCol;
 };
 
+//==============================================================================
 /** Builds controls for a list of host parameters: slider, menu or switch per parameter.
-    Used by the standalone plugins and by Basecamp's expanded view. */
+
+    Used by the standalone plugins and by Basecamp's expanded view. The mode decides density:
+    Beginner gives every control its plain-language line underneath, Normal shows the name alone
+    with the line as a tooltip, Minimal tightens the rows and drops the hints. */
 class ModulePanel : public juce::Component, private juce::Timer
 {
 public:
-    explicit ModulePanel (std::vector<HostParam*> params)
+    ModulePanel (std::vector<HostParam*> params, const Theme& t, Mode m)
+        : theme (t), mode (m)
     {
         for (auto* p : params)
         {
-            auto row = std::make_unique<Row>(); row->param = p; row->spec = p->getSpec();
-            row->label.setText (row->spec.name, juce::dontSendNotification);
-            row->label.setFont (look::font (17.0f));
-            addAndMakeVisible (row->label);
+            auto row = std::make_unique<Row>();
+            row->param = p; row->spec = p->getSpec();
             auto* r = row.get();
+
+            r->label.setText (r->spec.name, juce::dontSendNotification);
+            r->label.setFont (type::font (type::label, true));
+            r->label.setTooltip (r->spec.hint);
+            addAndMakeVisible (r->label);
+
+            r->hint.setText (r->spec.hint, juce::dontSendNotification);
+            r->hint.setFont (type::font (type::support));
+            r->hint.setColour (juce::Label::textColourId, theme.dim);
+            addChildComponent (r->hint);
+
             if (r->spec.type == ParamSpec::Type::Choice)
             {
                 r->combo.addItemList (r->spec.choices, 1);
+                r->combo.setTooltip (r->spec.hint);
                 r->combo.onChange = [r] { r->set ((float) r->combo.getSelectedItemIndex()); };
                 addAndMakeVisible (r->combo);
             }
             else if (r->spec.type == ParamSpec::Type::Bool)
             {
                 r->toggle.setClickingTogglesState (true);
-                r->toggle.onClick = [r] { r->set (r->toggle.getToggleState() ? 1.0f : 0.0f); r->toggle.setButtonText (r->toggle.getToggleState() ? "On" : "Off"); };
+                r->toggle.setTooltip (r->spec.hint);
+                r->toggle.onClick = [r] { r->set (r->toggle.getToggleState() ? 1.0f : 0.0f);
+                                          r->toggle.setButtonText (r->toggle.getToggleState() ? "On" : "Off"); };
                 addAndMakeVisible (r->toggle);
             }
             else
             {
                 r->slider.setSliderStyle (juce::Slider::LinearHorizontal);
-                r->slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 104, 30);
+                r->slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 112, 32);
                 r->slider.setRange (0.0, 1.0);
+                r->slider.setTooltip (r->spec.hint);
                 r->slider.textFromValueFunction = [r] (double v) { return r->spec.text (r->spec.fromNorm ((float) v)); };
                 r->slider.valueFromTextFunction = [r] (const juce::String& t) { return (double) r->spec.toNorm (r->spec.parse (t)); };
                 r->slider.setDoubleClickReturnValue (true, r->spec.toNorm (r->spec.def));
                 r->slider.onDragStart = [r] { r->dragging = true; r->param->beginChangeGesture(); };
-                r->slider.onDragEnd = [r] { r->dragging = false; r->param->endChangeGesture(); };
+                r->slider.onDragEnd   = [r] { r->dragging = false; r->param->endChangeGesture(); };
                 r->slider.onValueChange = [r]
                 {
                     if (r->dragging) r->param->setValueNotifyingHost ((float) r->slider.getValue());
@@ -131,41 +156,77 @@ public:
             }
             rows.push_back (std::move (row));
         }
+        applyMode();
         refresh();
         startTimerHz (20);
     }
-    int idealHeight() const { return (int) rows.size() * rowH + 8; }
+
+    void setTheme (const Theme&) { for (auto& r : rows) r->hint.setColour (juce::Label::textColourId, theme.dim); repaint(); }
+
+    void setMode (Mode m) { mode = m; applyMode(); resized(); repaint(); }
+
+    int rowHeight() const { return mode == Mode::Beginner ? 66 : mode == Mode::Minimal ? 40 : 48; }
+    int idealHeight() const { return (int) rows.size() * rowHeight() + 8; }
+
     void resized() override
     {
         auto r = getLocalBounds();
+        const int rh = rowHeight();
+        const int nameW = mode == Mode::Minimal ? 180 : 210;
         for (auto& row : rows)
         {
-            auto line = r.removeFromTop (rowH).reduced (0, 6);
-            row->label.setBounds (line.removeFromLeft (124));
-            if (row->spec.type == ParamSpec::Type::Choice)    row->combo.setBounds (line.removeFromLeft (220));
-            else if (row->spec.type == ParamSpec::Type::Bool) row->toggle.setBounds (line.removeFromLeft (90));
-            else row->slider.setBounds (line);
+            auto line = r.removeFromTop (rh).reduced (0, mode == Mode::Minimal ? 4 : 6);
+            auto names = line.removeFromLeft (nameW);
+            if (mode == Mode::Beginner && row->spec.hint.isNotEmpty())
+            {
+                row->label.setBounds (names.removeFromTop (names.getHeight() / 2));
+                row->hint.setBounds (line.removeFromBottom (line.getHeight() / 2 - 2));
+            }
+            else
+            {
+                row->label.setBounds (names);
+            }
+            if (row->spec.type == ParamSpec::Type::Choice)    row->combo.setBounds (line.removeFromLeft (230).withSizeKeepingCentre (230, 34));
+            else if (row->spec.type == ParamSpec::Type::Bool) row->toggle.setBounds (line.removeFromLeft (96).withSizeKeepingCentre (96, 32));
+            else                                              row->slider.setBounds (line);
         }
     }
+
 private:
-    static constexpr int rowH = 48;
     struct Row
     {
         HostParam* param = nullptr; ParamSpec spec; bool dragging = false;
-        juce::Label label; juce::Slider slider; juce::ComboBox combo; juce::TextButton toggle;
+        juce::Label label, hint; juce::Slider slider; juce::ComboBox combo; juce::TextButton toggle;
         void set (float real) { param->beginChangeGesture(); param->setValueNotifyingHost (spec.toNorm (real)); param->endChangeGesture(); }
     };
+
+    void applyMode()
+    {
+        for (auto& r : rows)
+            r->hint.setVisible (mode == Mode::Beginner && r->spec.hint.isNotEmpty());
+    }
+
     void refresh()
     {
         for (auto& row : rows)
         {
             const float n = row->param->getNorm(), real = row->spec.fromNorm (n);
-            if (row->spec.type == ParamSpec::Type::Choice) row->combo.setSelectedItemIndex ((int) real, juce::dontSendNotification);
-            else if (row->spec.type == ParamSpec::Type::Bool) { row->toggle.setToggleState (real >= 0.5f, juce::dontSendNotification); row->toggle.setButtonText (real >= 0.5f ? "On" : "Off"); }
-            else if (! row->dragging) row->slider.setValue (n, juce::dontSendNotification);
+            if (row->spec.type == ParamSpec::Type::Choice)
+                row->combo.setSelectedItemIndex ((int) real, juce::dontSendNotification);
+            else if (row->spec.type == ParamSpec::Type::Bool)
+            {
+                row->toggle.setToggleState (real >= 0.5f, juce::dontSendNotification);
+                row->toggle.setButtonText (real >= 0.5f ? "On" : "Off");
+            }
+            else if (! row->dragging)
+                row->slider.setValue (n, juce::dontSendNotification);
         }
     }
+
     void timerCallback() override { refresh(); }
+
+    const Theme& theme;
+    Mode mode;
     std::vector<std::unique_ptr<Row>> rows;
 };
 } // namespace ps

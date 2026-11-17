@@ -491,6 +491,68 @@ int main (int argc, char** argv)
         check (q.getSlotParams (0).empty() && q.getSlotHostParams (0).pool[0]->getName (64) == "S01 unused 01", "cleared slot unmaps its parameters");
     }
 
+
+    // ---- The suite interface -------------------------------------------------------------
+    {
+        // Beginner mode shows a plain-language line under every control. A module whose
+        // parameters carry no caption renders an empty row, which is how the first Beginner
+        // render came out, so this is checked for the whole suite rather than per plugin.
+        juce::StringArray missing;
+        for (auto& info : moduleRegistry())
+        {
+            auto m = info.create();
+            for (auto& spec : m->getParamSpecs())
+                if (spec.hint.isEmpty()) missing.add (info.name + "." + spec.id);
+        }
+        check (missing.isEmpty(), "every control has a plain-language caption"
+                                  + (missing.isEmpty() ? juce::String() : " (missing: " + missing.joinIntoString (", ") + ")"));
+
+        // Captions are for someone who has not used the tool: they should say what happens to
+        // the sound, not name the mechanism, and they have to fit the row.
+        int tooLong = 0;
+        for (auto& info : moduleRegistry())
+        {
+            auto m = info.create();
+            for (auto& spec : m->getParamSpecs())
+                if (spec.hint.length() > 130) ++tooLong;
+        }
+        check (tooLong == 0, "captions are short enough to fit one line");
+
+        // Vintage is a bonus look: never saved, never the opening look.
+        auto& ss = SuiteSettings::get();
+        const auto before = ss.look();
+        ss.setLook (Theme::Id::Vintage);
+        check (ss.look() != Theme::Id::Vintage, "Vintage is never saved as the suite Look");
+        ss.setLook (Theme::Id::Graphite);
+        check (ss.look() == Theme::Id::Graphite, "a listed Look is saved");
+        ss.setLook (before);
+
+        // Amber warnings have to stay visible in every Look, so the warning colour must keep
+        // real contrast against the surface it is drawn on. 3:1 is the floor for large text.
+        auto luminance = [] (juce::Colour c)
+        {
+            auto ch = [] (double v) { v /= 255.0; return v <= 0.03928 ? v / 12.92 : std::pow ((v + 0.055) / 1.055, 2.4); };
+            return 0.2126 * ch (c.getRed()) + 0.7152 * ch (c.getGreen()) + 0.0722 * ch (c.getBlue());
+        };
+        auto contrast = [&] (juce::Colour a, juce::Colour b)
+        {
+            const double la = luminance (a), lb = luminance (b);
+            return (juce::jmax (la, lb) + 0.05) / (juce::jmin (la, lb) + 0.05);
+        };
+        double worstWarn = 1.0e9, worstText = 1.0e9;
+        for (auto id : { Theme::Id::Default_, Theme::Id::Vaporwave, Theme::Id::Graphite, Theme::Id::Vintage })
+        {
+            const auto t = themes::byId (id);
+            worstWarn = juce::jmin (worstWarn, contrast (t.warn, t.panel));
+            worstText = juce::jmin (worstText, contrast (t.text, t.panel));
+            // Vintage fills its controls with silver, so its face text is dark; the others are
+            // light on a dark face. Either way the pair has to be readable.
+            worstText = juce::jmin (worstText, contrast (faceText (t), t.panelHi));
+        }
+        check (worstWarn >= 3.0, "amber warnings stay readable in every Look (worst " + juce::String (worstWarn, 1) + ":1)");
+        check (worstText >= 4.5, "text stays readable on every Look's surfaces (worst " + juce::String (worstText, 1) + ":1)");
+    }
+
     std::cout << (failures == 0 ? "ALL PASSED" : juce::String (failures) + " FAILED") << std::endl;
     return failures == 0 ? 0 : 1;
 }

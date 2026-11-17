@@ -149,16 +149,25 @@ private:
         for (int k = 0; k < 3; ++k)
         {
             const juce::String id ("b" + juce::String (k + 1)), nm ("Band " + juce::String (k + 1));
-            s.push_back (ParamSpec::number (id + ".freq", nm, "Hz", 20.0f, 20000.0f, def[k][0], true, 0));
-            s.push_back (ParamSpec::number (id + ".q", nm + " Q", "", 0.3f, 8.0f, def[k][1], true));
-            s.push_back (ParamSpec::choice (id + ".direction", nm + " direction", { "Cut", "Boost" }, (int) def[k][2]));
-            s.push_back (ParamSpec::number (id + ".range", nm + " range", "dB", 0.0f, 18.0f, def[k][3]));
-            s.push_back (ParamSpec::number (id + ".threshold", nm + " threshold", "dB", -60.0f, 0.0f, def[k][4]));
-            s.push_back (ParamSpec::number (id + ".attack", nm + " attack", "ms", 1.0f, 200.0f, def[k][5], false, 0));
-            s.push_back (ParamSpec::number (id + ".release", nm + " release", "ms", 10.0f, 1000.0f, def[k][6], false, 0));
-            s.push_back (ParamSpec::toggle (id + ".on", nm + " on", true));
+            s.push_back (ParamSpec::number (id + ".freq", nm, "Hz", 20.0f, 20000.0f, def[k][0], true, 0)
+                .says ("Which frequency this band watches. It only acts when that frequency gets loud."));
+            s.push_back (ParamSpec::number (id + ".q", nm + " Q", "", 0.3f, 8.0f, def[k][1], true)
+                .says ("How wide a range around the frequency this band touches. Higher is narrower."));
+            s.push_back (ParamSpec::choice (id + ".direction", nm + " direction", { "Cut", "Boost" }, (int) def[k][2])
+                .says ("Whether this band turns the frequency down when it gets loud, or up when it gets quiet."));
+            s.push_back (ParamSpec::number (id + ".range", nm + " range", "dB", 0.0f, 18.0f, def[k][3])
+                .says ("The most this band will ever move the frequency."));
+            s.push_back (ParamSpec::number (id + ".threshold", nm + " threshold", "dB", -60.0f, 0.0f, def[k][4])
+                .says ("How loud the frequency has to get before this band acts."));
+            s.push_back (ParamSpec::number (id + ".attack", nm + " attack", "ms", 1.0f, 200.0f, def[k][5], false, 0)
+                .says ("How quickly this band moves once it starts."));
+            s.push_back (ParamSpec::number (id + ".release", nm + " release", "ms", 10.0f, 1000.0f, def[k][6], false, 0)
+                .says ("How quickly this band settles back afterwards."));
+            s.push_back (ParamSpec::toggle (id + ".on", nm + " on", true)
+                .says ("Turn this band on or off."));
         }
-        s.push_back (ParamSpec::choice ("phase", "Phase", { "Natural (0 ms)", "Linear (43 ms)" }, 0));
+        s.push_back (ParamSpec::choice ("phase", "Phase", { "Natural (0 ms)", "Linear (43 ms)" }, 0)
+            .says ("Linear keeps the timing of the voice exact but adds delay. Natural adds none at all."));
         return s;
     }
     double omega (double f) const { return 2.0 * juce::MathConstants<double>::pi * juce::jmin (f, sampleRate * 0.45) / sampleRate; }

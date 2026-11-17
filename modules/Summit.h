@@ -17,13 +17,15 @@ class Summit : public Module
 {
 public:
     enum { pThreshold, pCeiling, pSpeed, pMode, pTruePeak, pTarget };
-    Summit() : Module ({ ParamSpec::number ("threshold", "Threshold", "dB", -24.0f, 0.0f, -3.0f),
-                         ParamSpec::number ("ceiling", "Ceiling", "dB", -12.0f, 0.0f, -1.0f),
-                         ParamSpec::number ("speed", "Speed", "", 0.0f, 10.0f, 6.0f),          // 0 = slow, 10 = fast
-                         ParamSpec::choice ("mode", "Mode", { "Clean", "Punch", "Warm" }, 0),
-                         ParamSpec::toggle ("truepeak", "True peak", true),
+    Summit() : Module ({ ParamSpec::number ("threshold", "Threshold", "dB", -24.0f, 0.0f, -3.0f).says ("Where it starts holding the loud parts back. Lower catches more of them."),
+                         ParamSpec::number ("ceiling", "Ceiling", "dB", -12.0f, 0.0f, -1.0f).says ("The highest level anything leaves at. Nothing gets past this."),
+                         ParamSpec::number ("speed", "Speed", "", 0.0f, 10.0f, 6.0f)           // 0 = slow, 10 = fast
+                             .says ("How quickly it lets go after a loud moment. Faster is louder, slower is smoother."),
+                         ParamSpec::choice ("mode", "Mode", { "Clean", "Punch", "Warm" }, 0).says ("The flavour of the limiting. Clean is the safe one."),
+                         ParamSpec::toggle ("truepeak", "True peak", true).says ("Also catches peaks that fall between samples, which is what streaming platforms measure."),
                          ParamSpec::choice ("target", "Loudness target",
-                                            { "Off", "Podcast -16 LUFS", "Mono -19 LUFS", "Streaming -14 LUFS" }, 1) }) {}
+                                            { "Off", "Podcast -16 LUFS", "Mono -19 LUFS", "Streaming -14 LUFS" }, 1)
+                             .says ("The loudness you are aiming for. The readout tells you where the episode currently sits.") }) {}
     juce::String getModuleId() const override { return "summit"; }
     juce::String getDisplayName() const override { return "Summit"; }
     juce::String getSubtitle() const override { return "Limiter"; }

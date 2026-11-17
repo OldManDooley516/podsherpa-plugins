@@ -63,6 +63,14 @@ target_sources(ps_tests PRIVATE tests/tests.cpp
     plugins/Basecamp/BasecampProcessor.cpp plugins/Basecamp/BasecampEditor.cpp)
 target_compile_definitions(ps_tests PRIVATE ${PS_DEFS})
 target_link_libraries(ps_tests PRIVATE juce::juce_audio_processors juce::juce_gui_basics juce::juce_recommended_config_flags)
+# Renders a plugin editor to a PNG with no window and no host, for looking at the interface on a
+# machine with no screen. A development tool: it checks layout and contrast, not host behaviour.
+juce_add_console_app(ps_shot PRODUCT_NAME "ps_shot")
+target_sources(ps_shot PRIVATE tests/shot.cpp)
+target_compile_definitions(ps_shot PRIVATE ${PS_DEFS})
+target_link_libraries(ps_shot PRIVATE juce::juce_audio_processors juce::juce_gui_basics
+    juce::juce_graphics juce::juce_recommended_config_flags)
+
 # Runs one module over a raw audio file, for checking a port against the original JSFX
 juce_add_console_app(ps_ref PRODUCT_NAME "ps_ref")
 target_sources(ps_ref PRIVATE tests/ref.cpp)

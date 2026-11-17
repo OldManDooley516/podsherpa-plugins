@@ -151,84 +151,364 @@ private:
     int program = 0;
 };
 
-/** Plain first-pass editor: side rails (In left, Out right), power button top right, footer. */
+/** The suite editor: header layout A, In and Out rails, footer.
+
+    Header layout A is one control row: the plugin's name on the left, the preset bar centred,
+    then the Look pill, the mode switch and the power button on the right.
+
+    The Look arrives from SuiteSettings, which is shared by every plugin and every instance, so
+    switching it in one window moves the others. Vintage is the exception: it is held here, for
+    the life of this window, because the standard says it is never saved and never opens. Picking
+    any Look swatch leaves it.
+
+    Bypass greys the whole plugin rather than just dimming the controls, so a bypassed plugin in
+    a rack of twelve is obvious at a glance. */
 class SinglePluginEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     explicit SinglePluginEditor (SinglePluginProcessor& p)
-        : juce::AudioProcessorEditor (p), proc (p), panel (p.getModuleParams()), inBar (p.inMeter), outBar (p.outMeter),
-          inAtt (*p.inGain, inSlider), outAtt (*p.outGain, outSlider), powerAtt (*p.bypass, power)
+        : juce::AudioProcessorEditor (p), proc (p),
+          theme (themes::byId (SuiteSettings::get().look())),
+          mode (SuiteSettings::get().mode()),
+          lnf (theme),
+          panel (p.getModuleParams(), theme, mode),
+          presets (theme, p),
+          lookPill (theme),
+          modeSwitch (theme, { "Beginner", "Normal", "Minimal" }),
+          power (theme),
+          footer (theme),
+          inMeterBar (theme, p.inMeter), outMeterBar (theme, p.outMeter),
+          inAtt (*p.inGain, inSlider), outAtt (*p.outGain, outSlider)
     {
+        applyTheme();
         setLookAndFeel (&lnf);
+
         for (auto* s : { &inSlider, &outSlider })
         {
             s->setSliderStyle (juce::Slider::LinearVertical);
-            s->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 70, 24);
+            s->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 72, 26);
             s->setTextValueSuffix (" dB");
             addAndMakeVisible (*s);
         }
-        power.setClickingTogglesState (true); power.setButtonText ("Bypass");
-        addAndMakeVisible (power); addAndMakeVisible (panel); addAndMakeVisible (inBar); addAndMakeVisible (outBar);
-        setSize (1120, juce::jmax (420, 190 + panel.idealHeight()));
+
+        lookPill.setLook (SuiteSettings::get().look());
+        lookPill.onChange = [this] (Theme::Id id)
+        {
+            SuiteSettings::get().setLook (id);   // leaves Vintage, as the standard requires
+            vintage = false;
+            customAccent = -1;
+            pullSuiteLook();
+        };
+
+        modeSwitch.setIndex ((int) mode);
+        modeSwitch.onChange = [this] (int i)
+        {
+            SuiteSettings::get().setMode ((Mode) i);
+            mode = (Mode) i;
+            panel.setMode (mode);
+            setSize (getWidth(), preferredHeight());   // Beginner adds a caption under every row
+            resized();
+            repaint();
+        };
+
+        power.setBypassed (proc.bypass->get());
+        power.onToggle = [this] (bool b)
+        {
+            proc.bypass->beginChangeGesture();
+            proc.bypass->setValueNotifyingHost (b ? 1.0f : 0.0f);
+            proc.bypass->endChangeGesture();
+            repaint();
+        };
+
+        footer.onVintageToggle = [this]
+        {
+            vintage = ! vintage;
+            customAccent = -1;
+            pullSuiteLook();
+        };
+        footer.onAccentWheel = [this]
+        {
+            customAccent = (customAccent + 1) % numVintageAccents;
+            applyTheme();
+            repaint();
+        };
+
+        addAndMakeVisible (panel);
+        addAndMakeVisible (presets);
+        addAndMakeVisible (lookPill);
+        addAndMakeVisible (modeSwitch);
+        addAndMakeVisible (power);
+        addAndMakeVisible (footer);
+        addAndMakeVisible (inMeterBar);
+        addAndMakeVisible (outMeterBar);
+        tips.setMillisecondsBeforeTipAppears (700);
+        addAndMakeVisible (tips);
+
+        setSize (1120, preferredHeight());
         startTimerHz (30);
     }
+
     ~SinglePluginEditor() override { setLookAndFeel (nullptr); }
+
+    /** Used by ps_shot, which has no host and no window, to force a Look for a screenshot. */
+    void setLookForShot (Theme::Id id, Mode m)
+    {
+        vintage = id == Theme::Id::Vintage;
+        lookPill.setLook (id);
+        mode = m;
+        modeSwitch.setIndex ((int) m);
+        panel.setMode (m);
+        theme = vintage ? themes::vintage() : themes::byId (id);
+        if (mode == Mode::Minimal) theme = themes::withMinimal (theme);
+        lnf.setTheme (theme);
+        panel.setTheme (theme);
+        setSize (getWidth(), preferredHeight());   // the mode may have changed the row height
+        resized();
+        repaint();
+    }
+    void tickForShot() { timerCallback(); }
+
     void paint (juce::Graphics& g) override
     {
-        g.fillAll (look::bg);
-        auto r = getLocalBounds();
-        auto head = r.removeFromTop (70).reduced (24, 0);
-        g.setColour (look::text); g.setFont (look::font (28.0f, true));
+        g.fillAll (theme.bg);
+
+        // Header: name, type and version on the left. The version sits in a knocked-out box.
+        g.setColour (theme.text);
+        g.setFont (type::font (type::title, true));
         const auto title = "PodSherpa " + proc.getModule().getDisplayName();
-        g.drawText (title, head, juce::Justification::centredLeft);
-        const int tw = juce::GlyphArrangement::getStringWidthInt (look::font (28.0f, true), title);
-        g.setColour (look::dim); g.setFont (look::font (20.0f, true));
-        g.drawText (proc.getModule().getSubtitle() + "   v" + suiteVersion(), head.withTrimmedLeft (tw + 18), juce::Justification::centredLeft);
-        look::footer (g, r.removeFromBottom (34));
-        g.setColour (look::panel); g.fillRoundedRectangle (panelArea.toFloat(), 10.0f);
-        g.setColour (look::dim); g.setFont (look::font (15.0f));
+        g.drawText (title, titleArea, juce::Justification::centredLeft);
+        const int tw = juce::GlyphArrangement::getStringWidthInt (type::font (type::title, true), title);
+
+        auto after = titleArea.withTrimmedLeft (tw + 16);
+        g.setColour (theme.dim);
+        g.setFont (type::font (type::subtitle, true));
+        const auto sub = proc.getModule().getSubtitle();
+        g.drawText (sub, after, juce::Justification::centredLeft);
+        const int sw = juce::GlyphArrangement::getStringWidthInt (type::font (type::subtitle, true), sub);
+
+        auto chip = after.withTrimmedLeft (sw + 12).withWidth (54).withSizeKeepingCentre (54, 22);
+        g.setColour (theme.line);
+        g.fillRoundedRectangle (chip.toFloat(), 4.0f);
+        g.setColour (theme.text);
+        g.setFont (type::font (type::footer, true));
+        g.drawText ("v" + juce::String (suiteVersion()), chip, juce::Justification::centred);
+
+        // Main panel, and a rail behind each meter so they do not float against the window edge.
+        g.setColour (theme.panel);
+        g.fillRoundedRectangle (panelArea.toFloat(), theme.corner);
+        g.setColour (theme.panel.withAlpha (0.6f));
+        g.fillRoundedRectangle (railLeft.toFloat(), theme.corner);
+        g.fillRoundedRectangle (railRight.toFloat(), theme.corner);
+
+        // Rail captions. "Out max" appears when the module holds the output below the setting,
+        // which otherwise looks like a broken control.
+        g.setColour (theme.dim);
+        g.setFont (type::font (type::support));
         g.drawText ("In", inLabel, juce::Justification::centred);
-        // Say so when the module holds the output gain below the setting, or the control looks broken.
         const float outCap = proc.getModule().getMaxOutputGainDb();
         g.drawText (proc.outGain->get() > outCap + 0.001f ? "Out max " + juce::String (outCap, 1) : juce::String ("Out"),
                     outLabel, juce::Justification::centred);
+
+        // The module's own meter, if it has one. Gain reduction is accent2 (blue in Default) and
+        // always carries its label and value, so the colour is never the only signal.
         if (proc.getModule().getModuleMeterLabel().isNotEmpty())
         {
-            g.setColour (look::blue); g.setFont (look::font (22.0f, true));
+            g.setColour (theme.accent2);
+            g.setFont (type::font (type::value, true));
             g.drawText (proc.getModule().getModuleMeterLabel() + ": " + juce::String (moduleMeter, 1) + " dB",
-                        panelArea.reduced (24, 12).removeFromBottom (34), juce::Justification::centredLeft);
+                        moduleMeterArea, juce::Justification::centredLeft);
         }
-        if (proc.bypass->get()) { g.setColour (look::bg.withAlpha (0.55f)); g.fillRect (getLocalBounds().withTrimmedTop (70)); }
+
+        if (mode == Mode::Beginner) paintPip (g);
+
+        if (proc.bypass->get())
+        {
+            g.setColour (theme.bg.withAlpha (0.62f));
+            g.fillRect (getLocalBounds());
+            g.setColour (theme.warn);
+            g.setFont (type::font (type::value, true));
+            g.drawText ("Bypassed", getLocalBounds().removeFromTop (headerH), juce::Justification::centred);
+        }
     }
+
     void resized() override
     {
         auto r = getLocalBounds();
-        power.setBounds (r.removeFromTop (70).removeFromRight (140).reduced (20, 18));
-        r.removeFromBottom (34);
-        auto left = r.removeFromLeft (130).reduced (14, 8), right = r.removeFromRight (130).reduced (14, 8);
-        inLabel = left.removeFromTop (22); outLabel = right.removeFromTop (22);
-        inBar.setBounds (left.removeFromLeft (26)); inSlider.setBounds (left);
-        outBar.setBounds (right.removeFromRight (26)); outSlider.setBounds (right);
+
+        measuredTitleWidth = headerLeftWidth();
+        auto head = r.removeFromTop (headerH).reduced (24, 0);
+        power.setBounds (head.removeFromRight (44).withSizeKeepingCentre (40, 40));
+        head.removeFromRight (14);
+        modeSwitch.setBounds (head.removeFromRight (modeSwitch.idealWidth()).withSizeKeepingCentre (modeSwitch.idealWidth(), 32));
+        head.removeFromRight (10);
+        lookPill.setBounds (head.removeFromRight (lookPill.idealWidth()).withSizeKeepingCentre (lookPill.idealWidth(), 32));
+        titleArea = head;
+        // The preset bar is centred on the window rather than on what is left of the row, so it
+        // stays put as the title and the right-hand controls change width. It is clamped to the
+        // gap between them, because at the default width a centred bar and a long plugin name
+        // overlap - which is exactly what the first render showed.
+        const int gapL = titleArea.getX() + measuredTitleWidth + 24;
+        const int gapR = head.getRight();
+        int pw = juce::jmin (presets.idealWidth(), juce::jmax (120, gapR - gapL - 16));
+        int cx = juce::jlimit (gapL + pw / 2, juce::jmax (gapL + pw / 2, gapR - pw / 2), getWidth() / 2);
+        presets.setBounds (juce::Rectangle<int> (pw, 34).withCentre ({ cx, headerH / 2 }));
+
+        footer.setBounds (r.removeFromBottom (34));
+
+        railLeft  = r.removeFromLeft (136).reduced (10, 8);
+        railRight = r.removeFromRight (136).reduced (10, 8);
+        auto left  = railLeft.reduced (10, 10);
+        auto right = railRight.reduced (10, 10);
+        inLabel  = left.removeFromTop (22);
+        outLabel = right.removeFromTop (22);
+        left.removeFromTop (4); right.removeFromTop (4);
+        // Meter beside its own fader, both inside the rail, so the pair reads as one control.
+        inMeterBar.setBounds (left.removeFromLeft (24));
+        left.removeFromLeft (8);
+        inSlider.setBounds (left);
+        outMeterBar.setBounds (right.removeFromRight (24));
+        right.removeFromRight (8);
+        outSlider.setBounds (right);
+
         panelArea = r.reduced (4, 8);
-        panel.setBounds (panelArea.reduced (24, 16).withTrimmedBottom (40));
+        auto inner = panelArea.reduced (24, 16);
+        moduleMeterArea = inner.removeFromBottom (34);
+        if (mode == Mode::Beginner) pipArea = inner.removeFromTop (54);
+        else                        pipArea = {};
+        panel.setBounds (inner);
     }
+
 private:
+    static constexpr int headerH = 74;
+    static constexpr int numVintageAccents = 5;
+
+    /** Tall enough for the controls at the current mode, plus the header, the footer, the
+        module's own meter strip and, in Beginner, Pip's badge. Worked out rather than fixed,
+        because the three modes differ by about 150 px on a five-control plugin. */
+    int preferredHeight() const
+    {
+        const int chrome = headerH + 34 + 16 + 34 + 32;   // header, footer, panel margins, meter strip
+        const int pip = mode == Mode::Beginner ? 58 : 0;
+        return juce::jmax (440, chrome + pip + panel.idealHeight());
+    }
+
+    /** Width of the name, processor type and version chip together, so resized() knows where the
+        left block ends and the preset bar can be kept clear of it. */
+    int headerLeftWidth() const
+    {
+        const auto title = "PodSherpa " + proc.getModule().getDisplayName();
+        int w = juce::GlyphArrangement::getStringWidthInt (type::font (type::title, true), title) + 16;
+        w += juce::GlyphArrangement::getStringWidthInt (type::font (type::subtitle, true), proc.getModule().getSubtitle());
+        return w + 12 + 54;   // gap plus the version chip
+    }
+
+    /** Pip, the mountain-guide mascot, with one plain-language line about this plugin. Beginner
+        mode only. This is a placeholder drawn in vector: real artwork for Pip is still to come,
+        and the badge is sized so swapping in an image does not move the layout. */
+    void paintPip (juce::Graphics& g) const
+    {
+        if (pipArea.isEmpty()) return;
+        auto r = pipArea;
+        auto badge = r.removeFromLeft (46).withSizeKeepingCentre (42, 42);
+
+        g.setColour (theme.panelHi);
+        g.fillEllipse (badge.toFloat());
+        g.setColour (theme.accent);
+        g.drawEllipse (badge.toFloat().reduced (0.5f), 1.4f);
+
+        // A mountain and a sun: the guide, in the smallest marks that still read.
+        juce::Path m;
+        auto b = badge.toFloat().reduced (9.0f);
+        m.startNewSubPath (b.getX(), b.getBottom());
+        m.lineTo (b.getX() + b.getWidth() * 0.38f, b.getY() + b.getHeight() * 0.28f);
+        m.lineTo (b.getX() + b.getWidth() * 0.58f, b.getY() + b.getHeight() * 0.62f);
+        m.lineTo (b.getX() + b.getWidth() * 0.72f, b.getY() + b.getHeight() * 0.40f);
+        m.lineTo (b.getRight(), b.getBottom());
+        m.closeSubPath();
+        g.setColour (theme.accent);
+        g.fillPath (m);
+
+        r.removeFromLeft (10);
+        g.setColour (theme.text);
+        g.setFont (type::font (type::label));
+        g.drawFittedText (proc.getModule().getSubtitle().isNotEmpty()
+                              ? "Pip says: " + plainIntro()
+                              : juce::String ("Pip says: start with a preset, then nudge one control at a time."),
+                          r, juce::Justification::centredLeft, 2);
+    }
+
+    juce::String plainIntro() const
+    {
+        const auto n = proc.getModule().getDisplayName();
+        return "this is your " + proc.getModule().getSubtitle().toLowerCase()
+             + ". Start with a preset, then nudge one control at a time and listen.";
+    }
+
+    /** Re-reads the suite Look (or keeps Vintage) and pushes it everywhere. */
+    void pullSuiteLook()
+    {
+        theme = vintage ? themes::vintage() : themes::byId (SuiteSettings::get().look());
+        applyTheme();
+        resized();
+        repaint();
+    }
+
+    void applyTheme()
+    {
+        if (mode == Mode::Minimal) theme = themes::withMinimal (theme);
+        if (vintage && customAccent >= 0)
+        {
+            static const juce::Colour wheel[numVintageAccents] {
+                juce::Colour (0xffe8a33d), juce::Colour (0xff8fb0a0), juce::Colour (0xffd2644f),
+                juce::Colour (0xff9ab0d8), juce::Colour (0xffc9a86a)
+            };
+            theme.accent = wheel[customAccent];
+            theme.accentIsCustom = true;
+        }
+        lnf.setTheme (theme);
+        panel.setTheme (theme);
+    }
+
     void timerCallback() override
     {
-        inBar.tick(); outBar.tick();
+        // Another plugin, possibly in another process, may have changed the Look.
+        SuiteSettings::get().reloadIfChangedExternally();
+        const int rev = SuiteSettings::get().getRevision();
+        if (rev != seenRevision)
+        {
+            seenRevision = rev;
+            const auto m = SuiteSettings::get().mode();
+            if (m != mode) { mode = m; modeSwitch.setIndex ((int) m); panel.setMode (m); }
+            if (! vintage) lookPill.setLook (SuiteSettings::get().look());
+            pullSuiteLook();
+        }
+        power.setBypassed (proc.bypass->get());
+        inMeterBar.tick();
+        outMeterBar.tick();
         moduleMeter = juce::jmax (proc.getModule().readModuleMeter(), moduleMeter - 0.5f);
         repaint();
     }
+
     SinglePluginProcessor& proc;
+    Theme theme;
+    Mode mode;
     PsLookAndFeel lnf;
     ModulePanel panel;
-    MeterBar inBar, outBar;
+    PresetBar presets;
+    LookPill lookPill;
+    Segmented modeSwitch;
+    PowerButton power;
+    Footer footer;
+    ThemedMeter inMeterBar, outMeterBar;
     juce::Slider inSlider, outSlider;
-    juce::TextButton power;
     juce::SliderParameterAttachment inAtt, outAtt;
-    juce::ButtonParameterAttachment powerAtt;
-    juce::Rectangle<int> panelArea, inLabel, outLabel;
+    juce::TooltipWindow tips { this };
+    juce::Rectangle<int> panelArea, inLabel, outLabel, titleArea, moduleMeterArea, pipArea, railLeft, railRight;
     float moduleMeter = 0.0f;
+    int measuredTitleWidth = 0;
+    bool vintage = false;
+    int customAccent = -1;
+    int seenRevision = SuiteSettings::get().getRevision();
 };
 
 inline juce::AudioProcessorEditor* SinglePluginProcessor::createEditor() { return new SinglePluginEditor (*this); }

@@ -25,9 +25,9 @@ class Scree : public Module
 {
 public:
     enum { pSensitivity, pLongest, pListen };
-    Scree() : Module ({ ParamSpec::number ("sensitivity", "Sensitivity", "%", 0.0f, 100.0f, 50.0f, false, 0),
-                        ParamSpec::number ("longest", "Longest click", "ms", 0.2f, 3.0f, 1.5f),
-                        ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved() }) {}
+    Scree() : Module ({ ParamSpec::number ("sensitivity", "Sensitivity", "%", 0.0f, 100.0f, 50.0f, false, 0).says ("How sharp a click has to be before it gets patched. Higher catches more, but can start nibbling at hard consonants."),
+                        ParamSpec::number ("longest", "Longest click", "ms", 0.2f, 3.0f, 1.5f).says ("The longest click it will repair. Anything longer is left for you to cut by hand."),
+                        ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved() .says ("Play only what is being taken out, so you can check it is clicks and not speech.") }) {}
     juce::String getModuleId() const override { return "scree"; }
     juce::String getDisplayName() const override { return "Scree"; }
     juce::String getSubtitle() const override { return "Click remover"; }

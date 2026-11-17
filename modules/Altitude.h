@@ -16,15 +16,15 @@ class Altitude : public Module
 {
 public:
     enum { pTarget, pSilence, pMaxBoost, pMaxCut, pRise, pFall, pSoft, pLoud, pLookahead };
-    Altitude() : Module ({ ParamSpec::number ("target", "Target", "dB", -36.0f, -12.0f, -22.0f),
-                           ParamSpec::number ("silence", "Silence", "dB", -80.0f, -25.0f, -50.0f, false, 0),
-                           ParamSpec::number ("maxboost", "Max boost", "dB", 0.0f, 12.0f, 6.0f),
-                           ParamSpec::number ("maxcut", "Max cut", "dB", 0.0f, 18.0f, 6.0f),
-                           ParamSpec::number ("rise", "Gain rise", "dB/s", 0.2f, 6.0f, 1.5f),
-                           ParamSpec::number ("fall", "Gain fall", "dB/s", 1.0f, 18.0f, 6.0f),
-                           ParamSpec::number ("soft", "Soft correction", "%", 0.0f, 100.0f, 100.0f, false, 0),
-                           ParamSpec::number ("loud", "Loud correction", "%", 0.0f, 100.0f, 100.0f, false, 0),
-                           ParamSpec::number ("lookahead", "Latency", "ms", 0.0f, 100.0f, 15.0f, false, 0) }) {}
+    Altitude() : Module ({ ParamSpec::number ("target", "Target", "dB", -36.0f, -12.0f, -22.0f).says ("The level it tries to hold the voice at throughout."),
+                           ParamSpec::number ("silence", "Silence", "dB", -80.0f, -25.0f, -50.0f, false, 0).says ("Anything quieter than this counts as silence and is left alone, so it does not lift room tone."),
+                           ParamSpec::number ("maxboost", "Max boost", "dB", 0.0f, 12.0f, 6.0f).says ("The most it will ever turn a quiet passage up."),
+                           ParamSpec::number ("maxcut", "Max cut", "dB", 0.0f, 18.0f, 6.0f).says ("The most it will ever turn a loud passage down."),
+                           ParamSpec::number ("rise", "Gain rise", "dB/s", 0.2f, 6.0f, 1.5f).says ("How quickly it brings a quiet passage up."),
+                           ParamSpec::number ("fall", "Gain fall", "dB/s", 1.0f, 18.0f, 6.0f).says ("How quickly it brings a loud passage down."),
+                           ParamSpec::number ("soft", "Soft correction", "%", 0.0f, 100.0f, 100.0f, false, 0).says ("How much of the correction is applied to the quiet parts."),
+                           ParamSpec::number ("loud", "Loud correction", "%", 0.0f, 100.0f, 100.0f, false, 0).says ("How much of the correction is applied to the loud parts."),
+                           ParamSpec::number ("lookahead", "Latency", "ms", 0.0f, 100.0f, 15.0f, false, 0) .says ("Lets it see what is coming so it can move in time, at the cost of a little delay.") }) {}
     juce::String getModuleId() const override { return "altitude"; }
     juce::String getDisplayName() const override { return "Altitude"; }
     juce::String getSubtitle() const override { return "Voice leveler"; }

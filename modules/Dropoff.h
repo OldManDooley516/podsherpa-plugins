@@ -17,10 +17,10 @@ class Dropoff : public Module
 {
 public:
     enum { pFreq, pSlope, pPhase, pListen };
-    Dropoff() : Module ({ ParamSpec::number ("freq", "Cutoff", "Hz", 20.0f, 500.0f, 80.0f, true, 0),
-                          ParamSpec::choice ("slope", "Slope", { "6 dB/oct", "12 dB/oct", "18 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct" }, 3),
-                          ParamSpec::choice ("phase", "Phase", { "Natural (0 ms)", "Linear (43 ms)" }, 0),
-                          ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved() }) {}
+    Dropoff() : Module ({ ParamSpec::number ("freq", "Cutoff", "Hz", 20.0f, 500.0f, 80.0f, true, 0).says ("Everything below this is removed. Rumble, footsteps and air conditioning all live down here."),
+                          ParamSpec::choice ("slope", "Slope", { "6 dB/oct", "12 dB/oct", "18 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct" }, 3).says ("How sharply it cuts. Steeper removes more, but can thin out a deep voice."),
+                          ParamSpec::choice ("phase", "Phase", { "Natural (0 ms)", "Linear (43 ms)" }, 0).says ("Linear keeps the timing of the voice exact but adds delay. Minimum adds no delay at all."),
+                          ParamSpec::toggle ("listen", "Listen to what's removed", false).notSaved() .says ("Play only what is being removed, so you can check you are not losing the voice with it.") }) {}
     juce::String getModuleId() const override { return "dropoff"; }
     juce::String getDisplayName() const override { return "Dropoff"; }
     juce::String getSubtitle() const override { return "High-pass filter"; }

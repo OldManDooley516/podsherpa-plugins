@@ -17,6 +17,13 @@ struct ParamSpec
     int decimals = 1;
     juce::StringArray choices;
 
+    /** One plain-language line saying what the control does, shown under its name in Beginner
+        mode and as the tooltip in the others. Written for someone who has never used the tool,
+        so it says what happens to the sound rather than naming the mechanism: "how sharp a click
+        has to be before it gets patched", not "detector threshold". Empty is allowed; the control
+        then shows its name alone. */
+    juce::String hint;
+
     static ParamSpec number (juce::String id, juce::String name, juce::String unit,
                              float min, float max, float def, bool logScale = false, int decimals = 1)
     {
@@ -36,6 +43,9 @@ struct ParamSpec
     /** For a control that must never come back on when a project is reopened, such as Listen:
         it stays automatable, but it is written out and read back as its default. */
     ParamSpec notSaved() const { ParamSpec s = *this; s.transient = true; return s; }
+
+    /** Attaches the plain-language line. Chained onto a builder: number(...).says("..."). */
+    ParamSpec says (juce::String plainEnglish) const { ParamSpec s = *this; s.hint = std::move (plainEnglish); return s; }
 
     float snap (float v) const
     {
