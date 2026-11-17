@@ -5,6 +5,7 @@
 #include "Theme.h"
 #include "SuiteSettings.h"
 #include "Chrome.h"
+#include <map>
 
 namespace ps
 {
@@ -156,6 +157,7 @@ public:
             }
             rows.push_back (std::move (row));
         }
+        buildGroups();
         applyMode();
         refresh();
         startTimerHz (20);
@@ -166,14 +168,74 @@ public:
     void setMode (Mode m) { mode = m; applyMode(); resized(); repaint(); }
 
     int rowHeight() const { return mode == Mode::Beginner ? 66 : mode == Mode::Minimal ? 40 : 48; }
-    int idealHeight() const { return (int) rows.size() * rowHeight() + 8; }
+
+    /** Parameters are named "low.threshold", "b2.freq", "hp.slope": the part before the dot is
+        the band or section they belong to. A flat list ignores that, which is why Ridgeline
+        arrived as 27 stacked sliders and Contour Dynamic as 25 - unreadable, and slow to work
+        with on a real edit. Grouped parameters are laid out as columns of knobs, one column per
+        section; ungrouped ones keep the full-width rows, which read better for a short list. */
+    static juce::String groupOf (const juce::String& id)
+    {
+        const int dot = id.indexOfChar ('.');
+        return dot > 0 ? id.substring (0, dot) : juce::String();
+    }
+
+    int knobCell() const { return mode == Mode::Minimal ? 78 : 92; }
+    int headerH() const { return 26; }
+
+    int idealHeight() const
+    {
+        int h = (int) plain.size() * rowHeight() + 8;
+        if (! groups.empty())
+        {
+            int deepest = 0;
+            for (auto& g : groups) deepest = juce::jmax (deepest, (int) g->rows.size());
+            h += headerH() + deepest * knobCell() + 14;
+        }
+        return h;
+    }
 
     void resized() override
     {
         auto r = getLocalBounds();
         const int rh = rowHeight();
         const int nameW = mode == Mode::Minimal ? 180 : 210;
-        for (auto& row : rows)
+
+        // Grouped sections first, as columns across the top.
+        if (! groups.empty())
+        {
+            int deepest = 0;
+            for (auto& g : groups) deepest = juce::jmax (deepest, (int) g->rows.size());
+            auto band = r.removeFromTop (headerH() + deepest * knobCell() + 14);
+            const int colW = band.getWidth() / (int) groups.size();
+            for (size_t gi = 0; gi < groups.size(); ++gi)
+            {
+                auto col = band.removeFromLeft (gi + 1 == groups.size() ? band.getWidth() : colW).reduced (4, 0);
+                groups[gi]->header.setBounds (col.removeFromTop (headerH()));
+                for (auto* row : groups[gi]->rows)
+                {
+                    auto cell = col.removeFromTop (knobCell());
+                    if (row->spec.type == ParamSpec::Type::Bool)
+                    {
+                        row->label.setBounds ({});
+                        row->toggle.setBounds (cell.withSizeKeepingCentre (juce::jmin (120, cell.getWidth() - 20), 32));
+                    }
+                    else if (row->spec.type == ParamSpec::Type::Choice)
+                    {
+                        row->label.setBounds (cell.removeFromTop (18));
+                        row->combo.setBounds (cell.reduced (6, 6).withHeight (30));
+                    }
+                    else
+                    {
+                        row->label.setBounds (cell.removeFromTop (18));
+                        row->slider.setBounds (cell.reduced (2, 0));
+                    }
+                }
+            }
+            r.removeFromTop (6);
+        }
+
+        for (auto& row : plain)
         {
             auto line = r.removeFromTop (rh).reduced (0, mode == Mode::Minimal ? 4 : 6);
             auto names = line.removeFromLeft (nameW);
@@ -227,6 +289,84 @@ private:
 
     const Theme& theme;
     Mode mode;
+    struct Group { juce::String id; juce::Label header; std::vector<Row*> rows; };
+
+    /** Splits the rows into sections by the part of the id before the dot, and takes each
+        section's heading from the words its parameter names share. "Low threshold", "Low ratio"
+        and "Low attack" become a "Low" heading over "threshold", "ratio" and "attack", so the
+        band name is written once instead of five times. */
+    void buildGroups()
+    {
+        std::vector<juce::String> order;
+        std::map<juce::String, std::vector<Row*>> byId;
+        for (auto& r : rows)
+        {
+            const auto g = groupOf (r->spec.id);
+            if (g.isEmpty()) { plain.push_back (r.get()); continue; }
+            if (byId.find (g) == byId.end()) order.push_back (g);
+            byId[g].push_back (r.get());
+        }
+        // A section of one is not a section; it reads better as an ordinary row.
+        for (auto& g : order)
+        {
+            auto& v = byId[g];
+            if (v.size() < 2) { for (auto* r : v) plain.push_back (r); continue; }
+            groups.push_back (std::make_unique<Group>());
+            auto& grp = *groups.back();
+            grp.id = g;
+            grp.rows = v;
+        }
+        for (auto& grpPtr : groups)
+        {
+            auto& grp = *grpPtr;
+            // Longest leading run of whole words common to every name in the section.
+            juce::StringArray first;
+            first.addTokens (grp.rows[0]->spec.name, " ", "");
+            int shared = first.size();
+            for (auto* r : grp.rows)
+            {
+                juce::StringArray w;
+                w.addTokens (r->spec.name, " ", "");
+                int k = 0;
+                while (k < shared && k < w.size() && w[k].equalsIgnoreCase (first[k])) ++k;
+                shared = juce::jmin (shared, k);
+            }
+            juce::String head;
+            for (int i = 0; i < shared; ++i) head += (i ? " " : "") + first[i];
+            if (head.isEmpty()) head = grp.id;
+            grp.header.setText (head.substring (0, 1).toUpperCase() + head.substring (1), juce::dontSendNotification);
+            grp.header.setFont (type::font (type::label, true));
+            grp.header.setJustificationType (juce::Justification::centred);
+            addAndMakeVisible (grp.header);
+
+            for (auto* r : grp.rows)
+            {
+                // The label is the part of the id after the dot - "low.threshold" gives
+                // "Threshold". That is always the control's role, where diffing the display
+                // names is not: "Band 1" and "Band 1 Q" share every word of the shorter one,
+                // which left the frequency knob labelled "1".
+                auto rest = r->spec.id.fromFirstOccurrenceOf (".", false, false);
+                if (rest.isEmpty()) rest = r->spec.name;
+                if (rest.equalsIgnoreCase ("q")) rest = "Q";
+                else if (rest.equalsIgnoreCase ("freq")) rest = "Frequency";
+                else if (rest.equalsIgnoreCase ("on")) rest = "";
+                r->label.setText (rest.substring (0, 1).toUpperCase() + rest.substring (1), juce::dontSendNotification);
+                r->label.setFont (type::font (type::support));
+                r->label.setJustificationType (juce::Justification::centred);
+                if (r->spec.type != ParamSpec::Type::Choice && r->spec.type != ParamSpec::Type::Bool)
+                {
+                    // Knobs in a column read far faster than a stack of wide sliders, and fit
+                    // four bands across the default window.
+                    r->slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+                    r->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 78, 20);
+                }
+                if (r->spec.type == ParamSpec::Type::Bool) r->toggle.setButtonText (r->spec.name);
+            }
+        }
+    }
+
     std::vector<std::unique_ptr<Row>> rows;
+    std::vector<Row*> plain;
+    std::vector<std::unique_ptr<Group>> groups;
 };
 } // namespace ps

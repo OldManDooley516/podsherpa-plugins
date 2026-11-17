@@ -35,6 +35,21 @@ public:
     virtual juce::String getModuleMeterLabel() const { return {}; }
     virtual float readModuleMeter() { return 0.0f; }
 
+    /** A second, slower readout drawn beside the meter: a whole phrase, already formatted,
+        because what it says differs by module. Summit uses it for integrated loudness, which it
+        has measured accurately since Nov 16 and had no way to show. Called from the editor's
+        timer, so it must not block; return an empty string for no readout.
+
+        Modules that offer one can also say whether it is on target, which the editor uses to
+        colour it - with the words still present, so the colour is never the only signal. */
+    virtual juce::String getExtraReadout() const { return {}; }
+    virtual bool extraReadoutIsGood() const { return true; }
+
+    /** Restarts whatever the extra readout accumulates. Shown as a button when the string is
+        non-empty; an integrated measurement is meaningless without a way to start it again. */
+    virtual void resetExtraReadout() {}
+    virtual bool hasExtraReadoutReset() const { return false; }
+
     /** Highest output gain in dB the shared wrapper may apply after this module, read every
         block. A module that promises a peak level (Summit's ceiling) lowers this so the gain
         after it cannot break that promise. Default: the full range of the output gain control. */

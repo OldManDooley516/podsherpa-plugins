@@ -241,6 +241,10 @@ public:
         addAndMakeVisible (footer);
         addAndMakeVisible (inMeterBar);
         addAndMakeVisible (outMeterBar);
+        extraReset.setButtonText ("Restart");
+        extraReset.setTooltip ("Start the loudness measurement again from here.");
+        extraReset.onClick = [this] { proc.getModule().resetExtraReadout(); };
+        addChildComponent (extraReset);
         tips.setMillisecondsBeforeTipAppears (700);
         addAndMakeVisible (tips);
 
@@ -319,6 +323,15 @@ public:
                         moduleMeterArea, juce::Justification::centredLeft);
         }
 
+        // The module's second readout (Summit's integrated loudness). Coloured by whether it is
+        // on target, but the verdict is written out too, so colour is never the only signal.
+        if (const auto extra = proc.getModule().getExtraReadout(); extra.isNotEmpty())
+        {
+            g.setColour (proc.getModule().extraReadoutIsGood() ? theme.accent : theme.warn);
+            g.setFont (type::font (type::label, true));
+            g.drawText (extra, extraArea, juce::Justification::centredRight);
+        }
+
         if (mode == Mode::Beginner) paintPip (g);
 
         if (proc.bypass->get())
@@ -372,7 +385,16 @@ public:
 
         panelArea = r.reduced (4, 8);
         auto inner = panelArea.reduced (24, 16);
-        moduleMeterArea = inner.removeFromBottom (34);
+        auto strip = inner.removeFromBottom (34);
+        if (proc.getModule().hasExtraReadoutReset() && proc.getModule().getExtraReadout().isNotEmpty())
+        {
+            extraReset.setVisible (true);
+            extraReset.setBounds (strip.removeFromRight (84).withSizeKeepingCentre (84, 26));
+            strip.removeFromRight (12);
+        }
+        else extraReset.setVisible (false);
+        extraArea = strip;
+        moduleMeterArea = strip;
         if (mode == Mode::Beginner) pipArea = inner.removeFromTop (54);
         else                        pipArea = {};
         panel.setBounds (inner);
@@ -503,7 +525,8 @@ private:
     juce::Slider inSlider, outSlider;
     juce::SliderParameterAttachment inAtt, outAtt;
     juce::TooltipWindow tips { this };
-    juce::Rectangle<int> panelArea, inLabel, outLabel, titleArea, moduleMeterArea, pipArea, railLeft, railRight;
+    juce::TextButton extraReset;
+    juce::Rectangle<int> panelArea, inLabel, outLabel, titleArea, moduleMeterArea, extraArea, pipArea, railLeft, railRight;
     float moduleMeter = 0.0f;
     int measuredTitleWidth = 0;
     bool vintage = false;

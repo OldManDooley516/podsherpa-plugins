@@ -50,6 +50,33 @@ public:
     /** Starts the measurement again. Safe from any thread: the audio thread does the work. */
     void restartLoudness() { restart.store (true, std::memory_order_relaxed); }
 
+    /** The readout Sean actually needs when delivering an episode: where the whole programme
+        sits, against the target he picked. Reads "-" until 400 ms has passed the gate. */
+    juce::String getExtraReadout() const override
+    {
+        const float l = getIntegratedLufs();
+        if (l < -100.0f) return "Integrated: - LUFS";
+        const float t = getLoudnessTargetLufs();
+        juce::String s = "Integrated: " + juce::String (l, 1) + " LUFS";
+        if (t != 0.0f)
+        {
+            const float d = l - t;
+            s += "   target " + juce::String (t, 0)
+               + "   " + (std::abs (d) < 0.5f ? juce::String ("on target")
+                                              : juce::String (d > 0 ? "+" : "") + juce::String (d, 1) + " to go");
+        }
+        return s;
+    }
+    /** Within half a decibel of the chosen target. Always Off-target-free when no target is set,
+        so the readout is not coloured as a warning when there is nothing to be wrong about. */
+    bool extraReadoutIsGood() const override
+    {
+        const float t = getLoudnessTargetLufs(), l = getIntegratedLufs();
+        return t == 0.0f || l < -100.0f || std::abs (l - t) < 0.5f;
+    }
+    void resetExtraReadout() override { restartLoudness(); }
+    bool hasExtraReadoutReset() const override { return true; }
+
     void prepare (double sr, int, int channels) override
     {
         sampleRate = sr; numChannels = juce::jmin (channels, maxChannels);
