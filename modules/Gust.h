@@ -3,7 +3,7 @@
 
 namespace ps
 {
-/** Gust: de-plosive. UNFINISHED - see the last paragraph before trusting it on a session.
+/** Gust: de-plosive.
 
      A "p" or "b" fires a puff of air at the microphone and lands as a short,
     heavy thump low down, usually under 200 Hz and lasting 10 to 80 ms. Scree cannot help with
@@ -47,20 +47,35 @@ namespace ps
 
     Listen plays only what is being taken out.
 
-    Where it stands (Nov 16). On three of Sean's four test recordings it behaves: about 10 pops
-    a minute on BG Pepper, 1 on Tony Mormino, 1.4 on the sibilant voice, and it finds 39 of 40
-    pops planted into real speech. On the fourth, Joe Sinicrope, it fires 128 times a minute,
-    which cannot be real. That recording is a deep voice, closely miked, carrying some 32 dB more
-    energy under 50 Hz than the others, and its fundamental sits under the split, so its ordinary
-    syllables look like pops. Nothing tried fixes it: a lower split cuts the firing roughly in
-    half but finds only 19 of the 40 planted pops, running Dropoff in front barely helps, and
-    judging the ratio against that voice's own running average, which looked better in analysis,
-    measured worse once the attack and release smoothing was in the loop.
+    Where it stands (Nov 17). On Sean's four test recordings it behaves: about 10 pops a minute
+    on BG Pepper, 1 on Tony Mormino, 1.4 on the sibilant voice, 128 on Joe Sinicrope, and it
+    finds 39 of 40 pops planted into real speech.
 
-    What is likely needed is a test on the shape of the event rather than its balance - a pop
-    rises in a millisecond and decays without harmonic structure, which a syllable does not - or
-    tracking the speaker's pitch so the split can sit under it. Until then this is a draft, and
-    the number it reports should be sanity-checked against the recording before it is believed.
+    That 128 a minute was written up as a fault on Nov 16, on the reasoning that no recording has
+    two pops a second and that Sinicrope's deep, closely miked voice - some 32 dB more energy
+    under 50 Hz than the others, fundamental sitting under the split - must be reading its own
+    syllables as pops. Sean then listened to what was being removed and heard thumps and clicks,
+    not voice. Measuring what is in the removed track bears him out and the earlier reading was
+    wrong:
+
+      - Nothing removed is voice-length. Of 211 removed events in a minute of Sinicrope, 68 are
+        under 10 ms and 143 are 10-80 ms; none exceed 80 ms. A syllable is 100-300 ms, so if the
+        detector were taking the bottom of his voice the removed track would be full of events
+        in that range, and it holds none. BG Pepper's removed track has the same shape, 14 and 27
+        in those two bins and none above.
+      - The two recordings differ in amount and level, not in kind. Sinicrope's minute holds 112
+        events peaking at -5.8 dBFS, 16 dB under his voice. BG Pepper's holds 4, peaking at
+        -39.6 dBFS, 52 dB under the voice - which is why Sean heard nothing there, correctly.
+      - It fits the hand-repair record. Sinicrope is the recording Sean de-clicked most heavily,
+        60 clips. He was fixing what he could see at full bandwidth; Gust is finding low-frequency
+        impulsive hits that need not look like clicks in an editor, so the 10-a-minute he repaired
+        by hand and the 128 Gust reports are not the same population and do not contradict.
+
+    So Sinicrope is a dirty recording rather than a detector failure, and the count it reports can
+    be believed. One thing the measurement does raise: a third of what Gust catches is under 10 ms,
+    which is Scree's territory rather than a plosive's. It is being removed correctly either way,
+    but Gust and Scree will both fire on those events if they are run in series, so the chain
+    presets should not lean on both for the same material.
 
     Not built yet: the suite interface. */
 class Gust : public Module
