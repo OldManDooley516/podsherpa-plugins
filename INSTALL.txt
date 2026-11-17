@@ -1,7 +1,20 @@
-PodSherpa plugins (Southern Digital) - test build
+PodSherpa plugins (Southern Digital FX) - test build
 
-These are early test builds: plain interface, first-draft sound. Three plugins:
-PodSherpa Basecamp (the master rack), PodSherpa Summit, PodSherpa Dropoff.
+Early test builds: plain first-pass interface, the suite look is not in yet.
+Twelve plugins - eleven repair and voice modules, plus the rack that holds them.
+
+  PodSherpa Basecamp          the master rack - load any of the modules below into its slots
+  PodSherpa Dropoff           high-pass filter, six slopes
+  PodSherpa Scree             click remover
+  PodSherpa Gust              de-plosive (the thump on a P or B)
+  PodSherpa Clearing          noise reduction, learns the room
+  PodSherpa Serac             de-esser, can learn where the sibilance sits
+  PodSherpa Contour           five-band voice EQ
+  PodSherpa Contour Dynamic   five-band dynamic EQ
+  PodSherpa Traverse          speech compressor
+  PodSherpa Ridgeline         four-band compressor
+  PodSherpa Altitude          voice leveler
+  PodSherpa Summit            look-ahead true-peak limiter, reads integrated loudness
 
 macOS
   1. Copy everything in VST3 to   ~/Library/Audio/Plug-Ins/VST3
@@ -15,3 +28,12 @@ macOS
 Windows
   1. Copy everything in VST3 to   C:\Program Files\Common Files\VST3
   2. Restart your DAW and rescan plugins.
+
+What to check on this build
+  - Every one of the twelve loads without hanging the DAW.
+  - Controls move audio while playback is running, not just when stopped.
+  - Dropoff's Phase switch flipped mid-playback does not click or drop out.
+  - Serac on a sibilant guest: Learn, then listen for lisping as Sensitivity goes past 50.
+  - Gust's Listen on a thumpy recording: you should hear thumps, not the bottom of the voice.
+  - Summit's loudness readout against whatever you normally trust for LUFS.
+  - Save a project, reopen it, and check every control came back where you left it.
