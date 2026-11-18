@@ -25,6 +25,16 @@ public:
     juce::String getDisplayName() const override { return "Traverse"; }
     juce::String getSubtitle() const override { return "Speech compressor"; }
     int getVersion() const override { return 1; }
+    bool hasTransferCurve() const override { return true; }
+    float getCurveThresholdDb() const override { return getParam (pThreshold); }
+    /** The same maths the audio thread uses, so the drawn curve is the curve, not a sketch
+        of it. Reads parameters directly rather than the smoothed values, so the picture
+        follows the control as it is dragged instead of lagging behind it. */
+    float curveOutputDb (float inputDb) const override
+    {
+        return (float) (inputDb - reduction (inputDb, getParam (pThreshold), getParam (pRatio), getParam (pKnee)));
+    }
+
     juce::String getModuleMeterLabel() const override { return "Gain reduction"; }
     float readModuleMeter() override { return maxGr.exchange (0.0f); }
 

@@ -199,7 +199,16 @@ public:
     {
         auto r = getLocalBounds();
         const int rh = rowHeight();
-        const int nameW = mode == Mode::Minimal ? 180 : 210;
+        // The name column and the value box are fixed widths, which is fine across the whole
+        // window and ruinous beside a curve card: at half width the slider itself was left with
+        // about 60 px. Both shrink when there is not room, so the slider keeps the remainder.
+        const bool tight = r.getWidth() < 640;
+        const int nameW = tight ? 118 : (mode == Mode::Minimal ? 180 : 210);
+        const int boxW = tight ? 84 : 112;
+        for (auto& row : plain)
+            if (row->spec.type != ParamSpec::Type::Choice && row->spec.type != ParamSpec::Type::Bool
+                && row->slider.getSliderStyle() == juce::Slider::LinearHorizontal)
+                row->slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, boxW, tight ? 28 : 32);
 
         // Grouped sections first, as columns across the top.
         if (! groups.empty())

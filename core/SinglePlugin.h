@@ -241,6 +241,13 @@ public:
         addAndMakeVisible (footer);
         addAndMakeVisible (inMeterBar);
         addAndMakeVisible (outMeterBar);
+        if (p.getModule().hasTransferCurve())
+        {
+            curve = std::make_unique<TransferCurve> (theme, p.getModule());
+            history = std::make_unique<ReductionHistory> (theme);
+            addAndMakeVisible (*curve);
+            addAndMakeVisible (*history);
+        }
         if (const auto lbl = p.getModule().getModuleMeterLabel(); lbl.isNotEmpty())
         {
             reduction = std::make_unique<ReductionMeter> (theme, lbl);
@@ -391,6 +398,7 @@ public:
         auto strip = inner.removeFromBottom ((reduction != nullptr ? 42 : 0) + (hasExtra ? 32 : 0)
                                              + (reduction == nullptr && ! hasExtra ? 34 : 0));
         if (reduction != nullptr) reduction->setBounds (strip.removeFromTop (42));
+        if (history != nullptr) history->setBounds (historyArea);
         if (hasExtra)
         {
             auto row = strip.removeFromTop (32);
@@ -406,6 +414,18 @@ public:
         moduleMeterArea = strip;
         if (mode == Mode::Beginner) pipArea = inner.removeFromTop (54);
         else                        pipArea = {};
+
+        // A module with a curve gets the JSFX arrangement: the curve card on the left, the
+        // controls beside it, and the reduction history across the bottom.
+        if (curve != nullptr)
+        {
+            historyArea = inner.removeFromBottom (126);
+            inner.removeFromBottom (10);
+            curve->setBounds (inner.removeFromLeft (juce::jmin (400, inner.getWidth() / 2)));
+            inner.removeFromLeft (16);
+        }
+        else historyArea = {};
+
         panel.setBounds (inner);
     }
 
@@ -425,6 +445,13 @@ private:
                          + (reduction == nullptr && ! hasExtra ? 34 : 0);
         const int chrome = headerH + 34 + 16 + stripH + 32;
         const int pip = mode == Mode::Beginner ? 58 : 0;
+        if (curve != nullptr)
+        {
+            // Tall enough for the curve card and the history, or for the controls beside the
+            // curve, whichever needs more.
+            const int body = juce::jmax (300, panel.idealHeight());
+            return chrome + pip + body + 136;
+        }
         return juce::jmax (440, chrome + pip + panel.idealHeight());
     }
 
@@ -523,6 +550,8 @@ private:
         outMeterBar.tick();
         moduleMeter = proc.getModule().readModuleMeter();
         if (reduction != nullptr) reduction->push (moduleMeter);
+        if (history != nullptr) history->push (moduleMeter);
+        if (curve != nullptr) curve->repaint();   // the curve follows the controls as they move
         repaint();
     }
 
@@ -540,9 +569,11 @@ private:
     juce::Slider inSlider, outSlider;
     juce::SliderParameterAttachment inAtt, outAtt;
     juce::TooltipWindow tips { this };
+    std::unique_ptr<TransferCurve> curve;
+    std::unique_ptr<ReductionHistory> history;
     std::unique_ptr<ReductionMeter> reduction;
     juce::TextButton extraReset;
-    juce::Rectangle<int> panelArea, inLabel, outLabel, titleArea, moduleMeterArea, extraArea, pipArea, railLeft, railRight;
+    juce::Rectangle<int> panelArea, inLabel, outLabel, titleArea, moduleMeterArea, extraArea, pipArea, railLeft, railRight, historyArea;
     float moduleMeter = 0.0f;
     int measuredTitleWidth = 0;
     bool vintage = false;

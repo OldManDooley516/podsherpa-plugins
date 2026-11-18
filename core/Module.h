@@ -42,6 +42,18 @@ public:
 
         Modules that offer one can also say whether it is on target, which the editor uses to
         colour it - with the words still present, so the colour is never the only signal. */
+    /** A compressor-shaped module can describe its own transfer curve, which the editor draws
+        as a card: input level in, output level out, both in dBFS. The JSFX versions have shown
+        this since 0.4 and the port had nothing, which is most of why the ports are harder to
+        work with than the originals. Generic on purpose - Ridgeline and Summit can offer it
+        without the editor knowing anything about compression.
+
+        getCurveThresholdDb returns where to draw the threshold guide; the curve is sampled
+        across -60 to 0 dBFS. */
+    virtual bool hasTransferCurve() const { return false; }
+    virtual float curveOutputDb (float inputDb) const { return inputDb; }
+    virtual float getCurveThresholdDb() const { return -60.0f; }
+
     virtual juce::String getExtraReadout() const { return {}; }
     virtual bool extraReadoutIsGood() const { return true; }
 

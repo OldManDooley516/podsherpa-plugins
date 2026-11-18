@@ -2,6 +2,7 @@
 #include "Theme.h"
 #include "SuiteSettings.h"
 #include "Meters.h"
+#include "Module.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 
 namespace ps
@@ -406,6 +407,158 @@ private:
     juce::String label;
     float fullScale = 18.0f, shown = 0.0f, hold = 0.0f;
     int holdAge = 0;
+};
+
+//==============================================================================
+/** The compression transfer curve, as the JSFX versions have drawn it since 0.4.
+
+    Input level across, output level down, both -60 to 0 dBFS, with the 1:1 diagonal implied by
+    the shaded area between it and the curve. A dotted vertical line marks the threshold and a
+    dot sits on the curve where it bends. Nothing here knows what compression is: it asks the
+    module for an output level given an input level, so any module with a curve gets one. */
+class TransferCurve : public juce::Component
+{
+public:
+    TransferCurve (const Theme& t, const Module& m) : theme (t), module (m) {}
+
+    void paint (juce::Graphics& g) override
+    {
+        auto outer = getLocalBounds();
+        g.setColour (theme.dim);
+        g.setFont (type::font (type::support));
+        g.drawText ("Compression curve", outer.removeFromTop (20), juce::Justification::centredLeft);
+
+        auto plot = outer.reduced (2);
+        g.setColour (theme.bg);
+        g.fillRoundedRectangle (plot.toFloat(), 4.0f);
+
+        g.setColour (theme.line.withAlpha (0.55f));
+        for (int i = 1; i < 4; ++i)
+        {
+            g.drawVerticalLine (plot.getX() + plot.getWidth() * i / 4, (float) plot.getY(), (float) plot.getBottom());
+            g.drawHorizontalLine (plot.getY() + plot.getHeight() * i / 4, (float) plot.getX(), (float) plot.getRight());
+        }
+
+        auto xOf = [&] (float db) { return plot.getX() + plot.getWidth() * (db + 60.0f) / 60.0f; };
+        auto yOf = [&] (float db) { return plot.getY() + plot.getHeight() * (-juce::jmax (-60.0f, db)) / 60.0f; };
+
+        // Threshold guide, dotted so it cannot be mistaken for the curve.
+        const float th = juce::jlimit (-60.0f, 0.0f, module.getCurveThresholdDb());
+        g.setColour (theme.warn.withAlpha (0.75f));
+        for (int y = plot.getY(); y < plot.getBottom(); y += 8)
+            g.fillRect ((float) xOf (th), (float) y, 1.0f, 4.0f);
+
+        // Shaded gap between 1:1 and the curve: how much is being taken off, at a glance.
+        constexpr int N = 169;
+        juce::Path fill, curve;
+        for (int i = 0; i < N; ++i)
+        {
+            const float d = -60.0f + 60.0f * (float) i / (float) (N - 1);
+            const float o = module.curveOutputDb (d);
+            const float x = (float) xOf (d), y = (float) yOf (o);
+            if (i == 0) { curve.startNewSubPath (x, y); fill.startNewSubPath (x, (float) yOf (d)); }
+            else        { curve.lineTo (x, y);          fill.lineTo (x, (float) yOf (d)); }
+        }
+        for (int i = N - 1; i >= 0; --i)
+        {
+            const float d = -60.0f + 60.0f * (float) i / (float) (N - 1);
+            fill.lineTo ((float) xOf (d), (float) yOf (module.curveOutputDb (d)));
+        }
+        fill.closeSubPath();
+        g.setColour (theme.accent2.withAlpha (0.28f));
+        g.fillPath (fill);
+        g.setColour (theme.accent);
+        g.strokePath (curve, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        g.setColour (theme.warn);
+        g.fillEllipse (juce::Rectangle<float> (9.0f, 9.0f).withCentre ({ (float) xOf (th), (float) yOf (module.curveOutputDb (th)) }));
+
+        g.setColour (theme.line);
+        g.drawRoundedRectangle (plot.toFloat().reduced (0.5f), 4.0f, 1.0f);
+    }
+
+private:
+    const Theme& theme;
+    const Module& module;
+};
+
+//==============================================================================
+/** Twelve seconds of gain reduction, scrolling right to left.
+
+    The number alone says what is happening now; this says whether the plugin has been riding
+    the whole take or catching the odd peak, which is the thing you actually need to know when
+    setting a compressor. One sample every 50 ms over 240 slots, as the JSFX does it, with the
+    scale growing in 6 dB steps so a quiet passage does not look dramatic. */
+class ReductionHistory : public juce::Component
+{
+public:
+    explicit ReductionHistory (const Theme& t) : theme (t) { hist.fill (0.0f); }
+
+    void push (float db)
+    {
+        pending = juce::jmax (pending, db);
+        if (++sinceWrite < 2) return;          // the editor ticks at 30 Hz; this wants 20
+        sinceWrite = 0;
+        hist[head] = juce::jmax (0.0f, pending);
+        head = (head + 1) % slots;
+        pending = 0.0f;
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto outer = getLocalBounds();
+        auto top = outer.removeFromTop (20);
+
+        float peak = 0.0f;
+        for (auto v : hist) peak = juce::jmax (peak, v);
+        const float span = juce::jmax (6.0f, std::ceil (peak / 6.0f) * 6.0f);
+
+        g.setColour (theme.dim);
+        g.setFont (type::font (type::support));
+        g.drawText ("Gain reduction, last 12 seconds", top, juce::Justification::centredLeft);
+        g.setColour (theme.accent2);
+        g.setFont (type::font (type::support, true));
+        g.drawText ("now " + juce::String (hist[(head + slots - 1) % slots], 1)
+                    + "    max " + juce::String (peak, 1) + " dB", top, juce::Justification::centredRight);
+
+        auto plot = outer.reduced (2);
+        g.setColour (theme.bg);
+        g.fillRoundedRectangle (plot.toFloat(), 4.0f);
+        g.setColour (theme.line.withAlpha (0.55f));
+        for (int i = 1; i < 3; ++i)
+            g.drawHorizontalLine (plot.getY() + plot.getHeight() * i / 3, (float) plot.getX(), (float) plot.getRight());
+
+        juce::Path area, line;
+        area.startNewSubPath ((float) plot.getX(), (float) plot.getY());
+        for (int i = 0; i < slots; ++i)
+        {
+            const float v = juce::jmin (span, hist[(head + i) % slots]);
+            const float x = plot.getX() + plot.getWidth() * (float) i / (float) (slots - 1);
+            const float y = plot.getY() + plot.getHeight() * (v / span);
+            area.lineTo (x, y);
+            if (i == 0) line.startNewSubPath (x, y); else line.lineTo (x, y);
+        }
+        area.lineTo ((float) plot.getRight(), (float) plot.getY());
+        area.closeSubPath();
+        g.setColour (theme.accent2.withAlpha (0.28f));
+        g.fillPath (area);
+        g.setColour (theme.accent2);
+        g.strokePath (line, juce::PathStrokeType (1.6f));
+
+        g.setColour (theme.dim.withAlpha (0.8f));
+        g.setFont (type::font (11.0f));
+        g.drawText ("-" + juce::String (span, 0), plot.reduced (4, 2), juce::Justification::bottomLeft);
+        g.setColour (theme.line);
+        g.drawRoundedRectangle (plot.toFloat().reduced (0.5f), 4.0f, 1.0f);
+    }
+
+private:
+    static constexpr int slots = 240;          // 240 x 50 ms = 12 seconds
+    const Theme& theme;
+    std::array<float, slots> hist {};
+    int head = 0, sinceWrite = 0;
+    float pending = 0.0f;
 };
 
 //==============================================================================
