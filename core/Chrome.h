@@ -331,6 +331,84 @@ private:
 };
 
 //==============================================================================
+/** Horizontal gain-reduction meter with a peak hold.
+
+    Every module that reduces gain already measured it and the editor only printed the number.
+    A number updating 30 times a second cannot be read, which is why Sean could not tell whether
+    a de-esser was leaning on one syllable or flattening every word. The bar can be watched; the
+    number is kept beside it, so the reading never depends on seeing the bar alone.
+
+    Reduction grows leftward from the right edge, which is the convention everywhere else, so a
+    busy plugin reads as a bar pushing back against the signal. Altitude rides gain both ways,
+    so a negative value (a boost) grows rightward from zero in the second accent instead. */
+class ReductionMeter : public juce::Component
+{
+public:
+    ReductionMeter (const Theme& t, juce::String labelText) : theme (t), label (std::move (labelText)) {}
+
+    void setRange (float maxDb) { fullScale = juce::jmax (1.0f, maxDb); }
+
+    /** Called from the editor's timer with the module's latest reading, in dB. */
+    void push (float db)
+    {
+        shown = db > shown ? db : shown + (db - shown) * 0.25f;     // snap up, ease down
+        if (std::abs (shown) >= std::abs (hold) || ++holdAge > 45) { hold = shown; holdAge = 0; }
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds();
+        auto text = r.removeFromLeft (juce::jmin (150, r.getWidth() / 4));
+        auto num = r.removeFromRight (74);
+        auto bar = r.reduced (8, 7);
+
+        g.setColour (theme.dim);
+        g.setFont (type::font (type::support));
+        g.drawText (label, text, juce::Justification::centredLeft);
+
+        g.setColour (theme.panelHi.withAlpha (0.65f));
+        g.fillRoundedRectangle (bar.toFloat(), 3.0f);
+
+        // Tick every 6 dB, so the depth can be judged without reading the number.
+        g.setColour (theme.line);
+        for (float d = 6.0f; d < fullScale; d += 6.0f)
+        {
+            const int x = bar.getRight() - (int) (bar.getWidth() * (d / fullScale));
+            g.drawVerticalLine (x, (float) bar.getY() + 2.0f, (float) bar.getBottom() - 2.0f);
+        }
+
+        const float f = juce::jlimit (0.0f, 1.0f, std::abs (shown) / fullScale);
+        if (f > 0.001f)
+        {
+            const bool boost = shown < 0.0f;
+            auto fill = boost ? bar.withWidth ((int) (bar.getWidth() * f))
+                              : bar.withLeft (bar.getRight() - (int) (bar.getWidth() * f));
+            g.setColour (boost ? theme.accent : theme.accent2);
+            g.fillRoundedRectangle (fill.toFloat(), 3.0f);
+        }
+        const float hf = juce::jlimit (0.0f, 1.0f, std::abs (hold) / fullScale);
+        if (hf > 0.001f)
+        {
+            const int x = hold < 0.0f ? bar.getX() + (int) (bar.getWidth() * hf)
+                                      : bar.getRight() - (int) (bar.getWidth() * hf);
+            g.setColour (theme.text.withAlpha (0.8f));
+            g.drawVerticalLine (x, (float) bar.getY(), (float) bar.getBottom());
+        }
+
+        g.setColour (theme.accent2);
+        g.setFont (type::font (type::value, true));
+        g.drawText (juce::String (shown, 1) + " dB", num, juce::Justification::centredRight);
+    }
+
+private:
+    const Theme& theme;
+    juce::String label;
+    float fullScale = 18.0f, shown = 0.0f, hold = 0.0f;
+    int holdAge = 0;
+};
+
+//==============================================================================
 /** The footer. Carries the only letter-spaced text in the suite, and hides Vintage behind a
     triple-click on it. In Vintage an unlabeled silver colour-wheel button appears bottom right
     and cycles the accent; it is deliberately unmarked. */

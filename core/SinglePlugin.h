@@ -241,6 +241,13 @@ public:
         addAndMakeVisible (footer);
         addAndMakeVisible (inMeterBar);
         addAndMakeVisible (outMeterBar);
+        if (const auto lbl = p.getModule().getModuleMeterLabel(); lbl.isNotEmpty())
+        {
+            reduction = std::make_unique<ReductionMeter> (theme, lbl);
+            // Altitude rides gain in both directions and can boost well past a limiter's range.
+            reduction->setRange (p.getModule().getMaxOutputGainDb() > 0.0f ? 18.0f : 12.0f);
+            addAndMakeVisible (*reduction);
+        }
         extraReset.setButtonText ("Restart");
         extraReset.setTooltip ("Start the loudness measurement again from here.");
         extraReset.onClick = [this] { proc.getModule().resetExtraReadout(); };
@@ -315,13 +322,6 @@ public:
 
         // The module's own meter, if it has one. Gain reduction is accent2 (blue in Default) and
         // always carries its label and value, so the colour is never the only signal.
-        if (proc.getModule().getModuleMeterLabel().isNotEmpty())
-        {
-            g.setColour (theme.accent2);
-            g.setFont (type::font (type::value, true));
-            g.drawText (proc.getModule().getModuleMeterLabel() + ": " + juce::String (moduleMeter, 1) + " dB",
-                        moduleMeterArea, juce::Justification::centredLeft);
-        }
 
         // The module's second readout (Summit's integrated loudness). Coloured by whether it is
         // on target, but the verdict is written out too, so colour is never the only signal.
@@ -385,15 +385,24 @@ public:
 
         panelArea = r.reduced (4, 8);
         auto inner = panelArea.reduced (24, 16);
-        auto strip = inner.removeFromBottom (34);
-        if (proc.getModule().hasExtraReadoutReset() && proc.getModule().getExtraReadout().isNotEmpty())
+        const bool hasExtra = proc.getModule().getExtraReadout().isNotEmpty();
+        // Each readout gets its own row. Sharing one left the reduction bar about 130 px wide,
+        // which is too short to judge depth on.
+        auto strip = inner.removeFromBottom ((reduction != nullptr ? 42 : 0) + (hasExtra ? 32 : 0)
+                                             + (reduction == nullptr && ! hasExtra ? 34 : 0));
+        if (reduction != nullptr) reduction->setBounds (strip.removeFromTop (42));
+        if (hasExtra)
         {
-            extraReset.setVisible (true);
-            extraReset.setBounds (strip.removeFromRight (84).withSizeKeepingCentre (84, 26));
-            strip.removeFromRight (12);
+            auto row = strip.removeFromTop (32);
+            extraReset.setVisible (proc.getModule().hasExtraReadoutReset());
+            if (extraReset.isVisible())
+            {
+                extraReset.setBounds (row.removeFromRight (84).withSizeKeepingCentre (84, 26));
+                row.removeFromRight (12);
+            }
+            extraArea = row;
         }
-        else extraReset.setVisible (false);
-        extraArea = strip;
+        else { extraArea = {}; extraReset.setVisible (false); }
         moduleMeterArea = strip;
         if (mode == Mode::Beginner) pipArea = inner.removeFromTop (54);
         else                        pipArea = {};
@@ -409,7 +418,12 @@ private:
         because the three modes differ by about 150 px on a five-control plugin. */
     int preferredHeight() const
     {
-        const int chrome = headerH + 34 + 16 + 34 + 32;   // header, footer, panel margins, meter strip
+        // header, footer, panel margins, then whatever the readout strip actually needs: the
+        // reduction meter and the extra readout each take their own row.
+        const bool hasExtra = proc.getModule().getExtraReadout().isNotEmpty();
+        const int stripH = (reduction != nullptr ? 42 : 0) + (hasExtra ? 32 : 0)
+                         + (reduction == nullptr && ! hasExtra ? 34 : 0);
+        const int chrome = headerH + 34 + 16 + stripH + 32;
         const int pip = mode == Mode::Beginner ? 58 : 0;
         return juce::jmax (440, chrome + pip + panel.idealHeight());
     }
@@ -507,7 +521,8 @@ private:
         power.setBypassed (proc.bypass->get());
         inMeterBar.tick();
         outMeterBar.tick();
-        moduleMeter = juce::jmax (proc.getModule().readModuleMeter(), moduleMeter - 0.5f);
+        moduleMeter = proc.getModule().readModuleMeter();
+        if (reduction != nullptr) reduction->push (moduleMeter);
         repaint();
     }
 
@@ -525,6 +540,7 @@ private:
     juce::Slider inSlider, outSlider;
     juce::SliderParameterAttachment inAtt, outAtt;
     juce::TooltipWindow tips { this };
+    std::unique_ptr<ReductionMeter> reduction;
     juce::TextButton extraReset;
     juce::Rectangle<int> panelArea, inLabel, outLabel, titleArea, moduleMeterArea, extraArea, pipArea, railLeft, railRight;
     float moduleMeter = 0.0f;
