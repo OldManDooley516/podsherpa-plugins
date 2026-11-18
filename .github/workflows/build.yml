@@ -14,7 +14,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: macOS, os: macos-latest }
+          - { name: macOS, os: macos-13 }   # Intel pool: the arm64 pool has refused to allocate all week.
+                                            # The build is universal anyway, so this still
+                                            # produces the arm64 slices an M-series Mac needs.
           - { name: Windows, os: windows-latest }
     steps:
       - uses: actions/checkout@v4
