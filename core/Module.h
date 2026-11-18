@@ -50,6 +50,13 @@ public:
 
         getCurveThresholdDb returns where to draw the threshold guide; the curve is sampled
         across -60 to 0 dBFS. */
+    /** A filter-shaped module can describe its own frequency response, which the editor draws
+        as a curve across 20 Hz to 20 kHz. Like the transfer curve, the editor knows nothing
+        about filters: it asks for a level in dB at a frequency. Contour implements it from the
+        same biquad coefficients the audio path runs, so the drawn curve is the real one. */
+    virtual bool hasFrequencyResponse() const { return false; }
+    virtual float responseDbAt (float) const { return 0.0f; }
+
     virtual bool hasTransferCurve() const { return false; }
     virtual float curveOutputDb (float inputDb) const { return inputDb; }
     virtual float getCurveThresholdDb() const { return -60.0f; }

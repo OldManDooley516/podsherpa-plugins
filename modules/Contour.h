@@ -129,6 +129,30 @@ public:
         for (int k = 0; k < 18; ++k) setParam (k, p.v[k]);
     }
 
+    bool hasFrequencyResponse() const override { return true; }
+
+    /** |H(e^jw)| of every active stage, multiplied, in dB. Uses the live coefficients, so the
+        curve follows the controls exactly rather than approximating them. */
+    float responseDbAt (float hz) const override
+    {
+        if (sampleRate <= 0.0) return 0.0f;
+        const double w = 2.0 * juce::MathConstants<double>::pi * (double) hz / sampleRate;
+        if (w >= juce::MathConstants<double>::pi) return 0.0f;
+        const double cw = std::cos (w), sw = std::sin (w), c2 = std::cos (2.0 * w), s2 = std::sin (2.0 * w);
+        double total = 0.0;
+        for (size_t i = 0; i < cf.size(); ++i)
+        {
+            if (! active[i]) continue;
+            const auto& c = cf[i];
+            const double nr = c[0] + c[1] * cw + c[2] * c2, ni = -(c[1] * sw + c[2] * s2);
+            const double dr = 1.0 + c[3] * cw + c[4] * c2, di = -(c[3] * sw + c[4] * s2);
+            const double den = dr * dr + di * di;
+            if (den < 1.0e-30) continue;
+            total += 10.0 * std::log10 (juce::jmax (1.0e-30, (nr * nr + ni * ni) / den));
+        }
+        return (float) juce::jlimit (-30.0, 30.0, total);
+    }
+
 private:
     static constexpr int maxChannels = 8;
     using Coef = std::array<double, 5>;

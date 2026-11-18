@@ -483,6 +483,81 @@ private:
 };
 
 //==============================================================================
+/** The EQ response curve, as Contour's JSFX draws it: 20 Hz to 20 kHz logarithmically, plus
+    and minus 18 dB, with the shaded area showing departure from flat.
+
+    Like the transfer curve this is generic - it asks the module for a level in dB at a
+    frequency - so Contour Dynamic and Dropoff can offer one by implementing two methods. */
+class ResponseCurve : public juce::Component
+{
+public:
+    ResponseCurve (const Theme& t, const Module& m) : theme (t), module (m) {}
+
+    void paint (juce::Graphics& g) override
+    {
+        auto outer = getLocalBounds();
+        g.setColour (theme.dim);
+        g.setFont (type::font (type::support));
+        g.drawText ("Response", outer.removeFromTop (20), juce::Justification::centredLeft);
+
+        auto plot = outer.reduced (2);
+        g.setColour (theme.bg);
+        g.fillRoundedRectangle (plot.toFloat(), 4.0f);
+
+        auto xOf = [&] (double hz)
+        {
+            const double a = std::log10 (juce::jlimit (20.0, 20000.0, hz) / 20.0) / 3.0;   // 20 Hz .. 20 kHz
+            return (float) (plot.getX() + plot.getWidth() * a);
+        };
+        auto yOf = [&] (double db)
+        {
+            return (float) (plot.getCentreY() - plot.getHeight() * juce::jlimit (-18.0, 18.0, db) / 36.0);
+        };
+
+        // Decade lines, and the 6 dB grid.
+        g.setColour (theme.line.withAlpha (0.5f));
+        for (double hz : { 100.0, 1000.0, 10000.0 })
+            g.drawVerticalLine ((int) xOf (hz), (float) plot.getY(), (float) plot.getBottom());
+        for (double db : { -12.0, -6.0, 6.0, 12.0 })
+            g.drawHorizontalLine ((int) yOf (db), (float) plot.getX(), (float) plot.getRight());
+        g.setColour (theme.line);
+        g.drawHorizontalLine ((int) yOf (0.0), (float) plot.getX(), (float) plot.getRight());
+
+        g.setColour (theme.dim.withAlpha (0.7f));
+        g.setFont (type::font (11.0f));
+        for (auto [hz, label] : { std::pair<double, const char*> { 100.0, "100" },
+                                  { 1000.0, "1k" }, { 10000.0, "10k" } })
+            g.drawText (label, juce::Rectangle<int> (40, 14).withCentre ({ (int) xOf (hz), plot.getBottom() - 9 }),
+                        juce::Justification::centred);
+
+        const int N = juce::jmax (2, plot.getWidth());
+        juce::Path curve, fill;
+        fill.startNewSubPath ((float) plot.getX(), yOf (0.0));
+        for (int i = 0; i < N; ++i)
+        {
+            const double a = (double) i / (double) (N - 1);
+            const double hz = 20.0 * std::pow (10.0, a * 3.0);
+            const float x = (float) (plot.getX() + plot.getWidth() * a), y = yOf (module.responseDbAt ((float) hz));
+            if (i == 0) curve.startNewSubPath (x, y); else curve.lineTo (x, y);
+            fill.lineTo (x, y);
+        }
+        fill.lineTo ((float) plot.getRight(), yOf (0.0));
+        fill.closeSubPath();
+        g.setColour (theme.accent2.withAlpha (0.25f));
+        g.fillPath (fill);
+        g.setColour (theme.accent);
+        g.strokePath (curve, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        g.setColour (theme.line);
+        g.drawRoundedRectangle (plot.toFloat().reduced (0.5f), 4.0f, 1.0f);
+    }
+
+private:
+    const Theme& theme;
+    const Module& module;
+};
+
+//==============================================================================
 /** Twelve seconds of gain reduction, scrolling right to left.
 
     The number alone says what is happening now; this says whether the plugin has been riding

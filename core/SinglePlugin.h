@@ -241,6 +241,11 @@ public:
         addAndMakeVisible (footer);
         addAndMakeVisible (inMeterBar);
         addAndMakeVisible (outMeterBar);
+        if (p.getModule().hasFrequencyResponse())
+        {
+            response = std::make_unique<ResponseCurve> (theme, p.getModule());
+            addAndMakeVisible (*response);
+        }
         if (p.getModule().hasTransferCurve())
         {
             curve = std::make_unique<TransferCurve> (theme, p.getModule());
@@ -426,6 +431,14 @@ public:
         }
         else historyArea = {};
 
+        // An EQ reads better with the curve across the top and the bands under it, which is how
+        // the JSFX lays it out: the shape is the thing you steer by, the numbers follow.
+        if (response != nullptr)
+        {
+            response->setBounds (inner.removeFromTop (juce::jmin (210, inner.getHeight() / 2)));
+            inner.removeFromTop (10);
+        }
+
         panel.setBounds (inner);
     }
 
@@ -452,6 +465,7 @@ private:
             const int body = juce::jmax (300, panel.idealHeight());
             return chrome + pip + body + 136;
         }
+        if (response != nullptr) return chrome + pip + 220 + panel.idealHeight();
         return juce::jmax (440, chrome + pip + panel.idealHeight());
     }
 
@@ -552,6 +566,7 @@ private:
         if (reduction != nullptr) reduction->push (moduleMeter);
         if (history != nullptr) history->push (moduleMeter);
         if (curve != nullptr) curve->repaint();   // the curve follows the controls as they move
+        if (response != nullptr) response->repaint();
         repaint();
     }
 
@@ -569,6 +584,7 @@ private:
     juce::Slider inSlider, outSlider;
     juce::SliderParameterAttachment inAtt, outAtt;
     juce::TooltipWindow tips { this };
+    std::unique_ptr<ResponseCurve> response;
     std::unique_ptr<TransferCurve> curve;
     std::unique_ptr<ReductionHistory> history;
     std::unique_ptr<ReductionMeter> reduction;
