@@ -1,6 +1,15 @@
 # PodSherpa assistant handoff
 
-Use merged pull requests in this repository to exchange product decisions and implementation status. ChatGPT/Codex primarily handles product and design. Claude primarily handles implementation. Sean makes product decisions and approves version changes.
+Use the relevant pull request as the running record for a plugin change. ChatGPT/Codex is the producer and Claude is the programmer. Sean makes final product decisions and approves version changes.
+
+Before starting work, check recent pull requests for the plugin and read the latest producer and implementation notes. Record a meaningful change when it happens, such as a confirmed direction, a blocker, a test result, or a decision needed from Sean.
+
+| Role | What to record |
+| --- | --- |
+| Producer | Editor problem, intended sound or workflow, approved scope, acceptance checks, and listening or release decisions |
+| Programmer | Implementation status, build or test evidence, technical tradeoffs, blockers, and the next programming step |
+
+Keep each note dated and name the plugin, the owner of the next action, and the supporting pull request or check. Mark REAPER listening as pending until it happens.
 
 Put one of these lines in the pull request description so the receiving assistant can identify the handoff:
 
@@ -11,7 +20,7 @@ Include the plugin name, the user-facing change, available build or test evidenc
 
 ## ChatGPT automation
 
-The GitHub trigger watches merged pull requests in this repository. The automation replies on the same pull request when it is a Claude handoff into `main`. Each reply starts with `PodSherpa handoff · Codex` and includes the merge commit SHA.
+The automation posts producer notes on Claude handoffs targeting `main` when the pull request is open for review or merged. Review notes include the head commit SHA. Merge notes include the merge commit SHA. Record follow-up discussion on the same pull request.
 
 ## Claude Code scheduled task
 
@@ -23,4 +32,4 @@ Use this prompt:
 
 ## Verify
 
-On the next normal handoff in each direction, check that the receiving assistant posts one comment on the merged pull request. Conversation comments do not trigger either automation.
+The [first handoff](https://github.com/OldManDooley516/podsherpa-plugins/pull/1) confirmed that Claude receives and acknowledges a merged producer handoff. On the next Claude implementation handoff, look for a producer review note and a merge summary on the same pull request. Conversation replies stay in the thread without starting another run.
