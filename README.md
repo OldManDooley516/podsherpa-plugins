@@ -37,3 +37,7 @@ are in `INSTALL.txt` inside the download.
   and manufacturer code (`SoDg`).
 - Basecamp's host parameter list: 12 slots, each with bypass, solo and 48 pooled parameters
   (`slot01.p01` ...). Saved projects and automation depend on it.
+
+## Standalone and REAPER prototypes
+
+See [PodSherpa prototypes](prototypes/README.md) for Waypoint, Switchback, and Eddy.

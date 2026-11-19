@@ -1,0 +1,112 @@
+{
+  "runner": "WDL/EEL via ysfx; independent REAPER 7.86 batch renders",
+  "tested_plugin": "PodSherpa Eddy v0.1.0",
+  "runs": 18,
+  "results": [
+    {
+      "check": "Amount 0 identity: 44100 Hz / 64 sample blocks",
+      "passed": true,
+      "max_error": 8.326672684688674e-17
+    },
+    {
+      "check": "Mix 0 dry alignment: 44100 Hz",
+      "passed": true,
+      "max_error": 0.0
+    },
+    {
+      "check": "Bypass overrides trim and removed monitoring: 44100 Hz",
+      "passed": true,
+      "max_error": 0.0
+    },
+    {
+      "check": "Amount 0 identity: 48000 Hz / 256 sample blocks",
+      "passed": true,
+      "max_error": 8.326672684688674e-17
+    },
+    {
+      "check": "Mix 0 dry alignment: 48000 Hz",
+      "passed": true,
+      "max_error": 0.0
+    },
+    {
+      "check": "Bypass overrides trim and removed monitoring: 48000 Hz",
+      "passed": true,
+      "max_error": 4.336808689942018e-19
+    },
+    {
+      "check": "Amount 0 identity: 96000 Hz / 511 sample blocks",
+      "passed": true,
+      "max_error": 1.1102230246251565e-16
+    },
+    {
+      "check": "Mix 0 dry alignment: 96000 Hz",
+      "passed": true,
+      "max_error": 0.0
+    },
+    {
+      "check": "Bypass overrides trim and removed monitoring: 96000 Hz",
+      "passed": true,
+      "max_error": 0.0
+    },
+    {
+      "check": "In-range resonance is reduced",
+      "passed": true,
+      "cut_db": 2.730331151435516
+    },
+    {
+      "check": "Anti-phase stereo does not cancel the detector",
+      "passed": true,
+      "cut_db": 2.730331151435516
+    },
+    {
+      "check": "Stereo image remains linked",
+      "passed": true
+    },
+    {
+      "check": "Out-of-range 150 Hz tone preserved",
+      "passed": true,
+      "level_change_db": 1.928654933106574e-15
+    },
+    {
+      "check": "Configured maximum cut respected on steady 3 kHz tone",
+      "passed": true,
+      "cut_db": 1.3707906849190303,
+      "limit_db": 1.5
+    },
+    {
+      "check": "Removed audio reconstructs dry when added to processed output",
+      "passed": true,
+      "max_error": 5.035860094927316e-21
+    },
+    {
+      "check": "Silence remains silent",
+      "passed": true,
+      "max_abs": 0.0
+    },
+    {
+      "check": "Flat broadband noise is largely preserved",
+      "passed": true,
+      "level_change_db": 0.0
+    },
+    {
+      "check": "Startup and ring wrap identity with impulses",
+      "passed": true,
+      "max_error": 1.9969657233210022e-17
+    },
+    {
+      "check": "REAPER 7.86 host: active suppression",
+      "passed": true,
+      "cut_db": 2.730329605477479
+    },
+    {
+      "check": "REAPER 7.86 host: unity and PDC",
+      "passed": true,
+      "max_error": 3.859381964010922e-08
+    },
+    {
+      "check": "REAPER 7.86 host: removed monitor alignment",
+      "passed": true,
+      "max_error": 1.0368646714137286e-07
+    }
+  ]
+}

@@ -1,0 +1,510 @@
+desc:PodSherpa Eddy v0.1.0
+author:PodSherpa
+version:0.1.0
+tags:equalizer dynamics restoration
+// Original experimental resonance-reduction algorithm. Not affiliated with oeksound.
+// Aimed at editing and mixing, rather than live monitoring.
+// Stereo-linked POWER detection avoids cancellation of out-of-phase inputs.
+// Four-times-overlapped Hann analysis/synthesis, unity-normalized WOLA.
+
+slider1:45<0,100,1>-Amount (%)
+slider2:3<0,12,0.1>-Maximum cut (dB)
+slider3:9<0,18,0.1>-Selectivity (dB)
+slider4:1000<80,18000,1:log>-Range low (Hz)
+slider5:9000<100,22000,1:log>-Range high (Hz)
+slider6:30<5,200,1>-Attack (ms)
+slider7:180<40,1000,1>-Release (ms)
+slider8:100<0,100,1>-Mix (%)
+slider9:0<-12,12,0.1>-Output (dB)
+slider10:0<0,1,1{Output,Removed}>-Listen to removed audio
+slider11:0<0,1,1{Active,Bypassed}>-Bypass
+
+in_pin:Left
+in_pin:Right
+out_pin:Left
+out_pin:Right
+
+@init
+ext_nodenorm = 1;
+N = 4096;
+H = 1024;
+K = N/2;
+ext_tail_size = 2*N;
+ext_gr_meter = 0;
+
+// Both FFT buffers fit within individual 65536-slot memory pages.
+fft_l = 0;
+fft_r = 8192;
+history_l = 16384;
+history_r = 20480;
+overlap_l = 24576;
+overlap_r = 28672;
+window = 32768;
+power = 36864;
+prefix = 40960;
+envelope = 45056;
+target = 49152;
+weight = 53248;
+radius = 57344;
+spectrum_db = 61440;
+reduction_db = 65536;
+memset(0,0,69632);
+memset(spectrum_db,-120,K+1);
+ring_pos = 0;
+hop_count = 0;
+frame_peak_cut = 0;
+current_mix = min(1,max(0,slider8/100));
+current_trim = exp(slider9*log(10)/20);
+current_delta = slider10;
+current_bypass = slider11;
+switch_smooth = 1-exp(-1/(0.010*srate));
+i = 0;
+loop(N,
+  window[i] = 0.5-0.5*cos(2*$pi*i/N);
+  i += 1;
+);
+ui_drag = 0;
+ui_prev_cap = 0;
+ui_font = 0;
+
+function update_parameters() local(i f low high tl th)
+(
+  depth = min(1,max(0,slider1/100));
+  cut_limit = max(0,slider2);
+  selectivity = max(0,slider3);
+  low = max(20,min(slider4,slider5));
+  high = min(srate*0.49,max(slider4,slider5));
+  attack_coef = exp(-H/(srate*max(0.005,slider6*0.001)));
+  release_coef = exp(-H/(srate*max(0.040,slider7*0.001)));
+  mix_target = min(1,max(0,slider8/100));
+  trim_target = exp(min(12,max(-12,slider9))*log(10)/20);
+  delta_target = slider10 >= 0.5;
+  bypass_target = slider11 >= 0.5;
+  i = 0;
+  loop(K+1,
+    f = i*srate/N;
+    // Half-octave fades inside both range boundaries; exact unity outside.
+    tl = min(1,max(0,log(max(1,f)/low)/log(2)*2));
+    th = min(1,max(0,log(high/max(1,f))/log(2)*2));
+    weight[i] = tl*tl*(3-2*tl)*th*th*(3-2*th);
+    radius[i] = max(6,floor(i*0.18));
+    i += 1;
+  );
+);
+
+function process_frame()
+  local(i j q re im p total a b center_left center_right mean_power
+        prominence gate wanted coeff g reflected v scale)
+(
+  i = 0;
+  q = ring_pos;
+  loop(N,
+    j = i*2;
+    fft_l[j] = history_l[q]*window[i];
+    fft_l[j+1] = 0;
+    fft_r[j] = history_r[q]*window[i];
+    fft_r[j+1] = 0;
+    q += 1;
+    q >= N ? q = 0;
+    i += 1;
+  );
+  fft(fft_l,N);
+  fft_permute(fft_l,N);
+  fft(fft_r,N);
+  fft_permute(fft_r,N);
+
+  scale = 16/(N*N);
+  prefix[0] = 0;
+  i = 0;
+  loop(K+1,
+    j = i*2;
+    re = fft_l[j]; im = fft_l[j+1];
+    p = re*re+im*im;
+    re = fft_r[j]; im = fft_r[j+1];
+    p = max(0.000000000000000000000001,(p+re*re+im*im)*0.5*scale);
+    power[i] = p;
+    prefix[i+1] = prefix[i]+p;
+    spectrum_db[i] = max(-120,log(p)*4.342944819);
+    i += 1;
+  );
+
+  // Compare a spectral peak with its neighbourhood's arithmetic-mean power.
+  // This is a heuristic: it cannot distinguish every formant from a resonance.
+  // Exclude the central three bins so an isolated peak does not mask itself.
+  i = 0;
+  loop(K+1,
+    a = max(0,i-radius[i]);
+    b = min(K,i+radius[i]);
+    center_left = max(a,i-1);
+    center_right = min(b,i+1);
+    total = prefix[b+1]-prefix[a]-(prefix[center_right+1]-prefix[center_left]);
+    mean_power = max(0.000000000000000000000001,total/max(1,(b-a+1)-(center_right-center_left+1)));
+    prominence = max(0,4.342944819*log(power[i]/mean_power)-selectivity);
+    // Soft activity floor fades processing between -85 and -70 dBFS per bin.
+    gate = min(1,max(0,(spectrum_db[i]+85)/15));
+    target[i] = min(cut_limit,depth*prominence)*gate;
+    i += 1;
+  );
+
+  frame_peak_cut = 0;
+  i = 0;
+  loop(K+1,
+    // Short spectral smoothing and slow time envelopes limit flutter.
+    wanted = (target[max(0,i-1)]+2*target[i]+target[min(K,i+1)])*0.25;
+    coeff = wanted > envelope[i] ? attack_coef : release_coef;
+    envelope[i] = min(cut_limit,max(0,coeff*envelope[i]+(1-coeff)*wanted));
+    v = envelope[i]*weight[i];
+    reduction_db[i] = v;
+    frame_peak_cut = max(frame_peak_cut,v);
+    g = exp(-v*0.11512925465);
+    j = i*2;
+    fft_l[j] *= g; fft_l[j+1] *= g;
+    fft_r[j] *= g; fft_r[j+1] *= g;
+    // Apply the identical real-valued mask to both complex conjugate bins.
+    i > 0 && i < K ? (
+      reflected = (N-i)*2;
+      fft_l[reflected] *= g; fft_l[reflected+1] *= g;
+      fft_r[reflected] *= g; fft_r[reflected+1] *= g;
+    );
+    i += 1;
+  );
+  fft_ipermute(fft_l,N);
+  ifft(fft_l,N);
+  fft_ipermute(fft_r,N);
+  ifft(fft_r,N);
+  // Sum of squared periodic Hann windows at 75% overlap equals 1.5.
+  scale = 1/(N*1.5);
+  i = 0;
+  q = ring_pos;
+  loop(N,
+    v = window[i]*scale;
+    overlap_l[q] += fft_l[2*i]*v;
+    overlap_r[q] += fft_r[2*i]*v;
+    q += 1;
+    q >= N ? q = 0;
+    i += 1;
+  );
+);
+
+update_parameters();
+
+@slider
+update_parameters();
+
+@block
+pdc_delay = N;
+pdc_bot_ch = 0;
+pdc_top_ch = 2;
+ext_gr_meter = -frame_peak_cut*current_mix*(1-current_bypass)*(1-current_delta);
+
+@sample
+// Read the old input before overwriting it: this is the exactly aligned dry path.
+dry_l = history_l[ring_pos];
+dry_r = history_r[ring_pos];
+history_l[ring_pos] = spl0;
+history_r[ring_pos] = spl1;
+wet_l = overlap_l[ring_pos];
+wet_r = overlap_r[ring_pos];
+overlap_l[ring_pos] = 0;
+overlap_r[ring_pos] = 0;
+ring_pos += 1;
+ring_pos >= N ? ring_pos = 0;
+hop_count += 1;
+hop_count >= H ? (
+  hop_count = 0;
+  process_frame();
+);
+current_mix += switch_smooth*(mix_target-current_mix);
+current_trim += switch_smooth*(trim_target-current_trim);
+current_delta += switch_smooth*(delta_target-current_delta);
+current_bypass += switch_smooth*(bypass_target-current_bypass);
+blend_l = dry_l+current_mix*(wet_l-dry_l);
+blend_r = dry_r+current_mix*(wet_r-dry_r);
+removed_l = current_mix*(dry_l-wet_l);
+removed_r = current_mix*(dry_r-wet_r);
+out_l = blend_l*current_trim;
+out_r = blend_r*current_trim;
+out_l += current_delta*(removed_l-out_l);
+out_r += current_delta*(removed_r-out_r);
+spl0 = out_l+current_bypass*(dry_l-out_l);
+spl1 = out_r+current_bypass*(dry_r-out_r);
+
+@gfx 1000 670
+
+function label_at(x y text font r g b)
+(
+  gfx_setfont(font);
+  gfx_set(r,g,b,1);
+  gfx_x = x; gfx_y = y;
+  gfx_drawstr(text);
+);
+
+function hit(x y w h)
+(
+  mouse_x >= x && mouse_x <= x+w && mouse_y >= y && mouse_y <= y+h;
+);
+
+// Three spectral peaks with the middle tip separated by a small gap.
+function eddy_badge(x y)
+(
+  gfx_set(0.55,0.82,0.97,1);
+  gfx_circle(x,y,23,1,1);
+  gfx_set(0.031,0.055,0.086,1);
+  gfx_circle(x,y,19,1,1);
+  gfx_set(0.55,0.82,0.97,1);
+  gfx_rect(x-15,y+6,30,3);
+  gfx_triangle(x-14,y+7,x-10,y-4,x-6,y+7);
+  gfx_triangle(x-5,y+7,x,y-5,x+5,y+7);
+  gfx_rect(x-1.5,y-13,3,4);
+  gfx_triangle(x+6,y+7,x+10,y-4,x+14,y+7);
+);
+
+function param_notify(id)
+(
+  sliderchange(2^(id-1));
+  slider_automate(2^(id-1));
+  update_parameters();
+);
+
+function range_handle(x y height active)
+(
+  active ? gfx_set(0.64,0.85,1,1) : gfx_set(0.37,0.62,0.82,0.86);
+  gfx_line(x,y,x,y+height,1);
+  gfx_triangle(x-6,y,x+6,y,x,y+8);
+);
+
+function button(x y w text active) local(over)
+(
+  over = hit(x,y,w,31);
+  active ? gfx_set(0.18,0.37,0.57,1) : gfx_set(0.08+over*0.025,0.13+over*0.035,0.19+over*0.045,1);
+  gfx_rect(x,y,w,31);
+  gfx_set(0.75,0.86,0.96,1);
+  gfx_setfont(2);
+  gfx_x = x; gfx_y = y;
+  gfx_drawstr(text,5,x+w,y+31);
+  ui_press && over;
+);
+
+function parameter(id x y w title lo hi step logarithmic default suffix)
+  local(value norm new_norm new_value)
+(
+  value = slider(id);
+  norm = logarithmic ? log(value/lo)/log(hi/lo) : (value-lo)/(hi-lo);
+  gfx_set(0.058,0.095,0.14,1);
+  gfx_rect(x,y,w,88);
+  label_at(x+14,y+12,title,2,0.51,0.64,0.76);
+  gfx_setfont(3);
+  gfx_set(0.85,0.92,0.99,1);
+  gfx_x=x+14; gfx_y=y+33;
+  id == 4 || id == 5 ? (
+    value >= 1000 ? gfx_printf("%.2f kHz",value/1000) : gfx_printf("%.0f Hz",value);
+  ) : (
+    step < 1 ? gfx_printf("%.1f %s",value,suffix) : gfx_printf("%.0f %s",value,suffix);
+  );
+  gfx_set(0.12,0.21,0.30,1);
+  gfx_rect(x+14,y+73,w-28,3);
+  gfx_set(0.41,0.69,0.96,1);
+  gfx_rect(x+14,y+73,(w-28)*min(1,max(0,norm)),3);
+  ui_press && hit(x,y,w,88) ? (
+    ui_drag = id;
+  );
+  ui_drag == id && !ui_graph_drag && (mouse_cap&1) ? (
+    new_norm = min(1,max(0,(mouse_x-x-14)/(w-28)));
+    new_value = logarithmic ? lo*exp(new_norm*log(hi/lo)) : lo+new_norm*(hi-lo);
+    slider(id) = min(hi,max(lo,floor(new_value/step+0.5)*step));
+    param_notify(id);
+  );
+  hit(x,y,w,88) && mouse_wheel != 0 ? (
+    new_value = logarithmic ? value*exp(mouse_wheel/120*0.03) : value+mouse_wheel/120*step;
+    slider(id) = min(hi,max(lo,floor(new_value/step+0.5)*step));
+    mouse_wheel=0;
+    param_notify(id);
+  );
+  ui_right_press && hit(x,y,w,88) ? (
+    slider(id)=default;
+    param_notify(id);
+  );
+);
+
+function apply_starting_point(index)
+(
+  index == 0 ? (
+    slider1=45;slider2=3;slider3=9;slider4=1000;slider5=9000;slider6=30;slider7=180;
+  );
+  index == 1 ? (
+    slider1=55;slider2=4;slider3=8;slider4=1800;slider5=9500;slider6=20;slider7=160;
+  );
+  index == 2 ? (
+    slider1=35;slider2=2.5;slider3=11;slider4=650;slider5=2200;slider6=40;slider7=220;
+  );
+  index == 3 ? (
+    slider1=30;slider2=2.5;slider3=12;slider4=180;slider5=700;slider6=50;slider7=250;
+  );
+  slider8=100;slider9=0;slider10=0;slider11=0;
+  sliderchange(2047);
+  slider_automate(2047);
+  update_parameters();
+);
+
+ui_scale = min(gfx_w/1000,gfx_h/670);
+// Keep a readable fixed layout. REAPER can scale the JSFX window with OS HiDPI.
+gfx_clear = 0x160E08;
+gfx_set(0.031,0.055,0.086,1);
+gfx_rect(0,0,gfx_w,gfx_h);
+gfx_setfont(1,"Arial",30,'b');
+gfx_setfont(2,"Arial",12);
+gfx_setfont(3,"Arial",22);
+gfx_setfont(4,"Arial",42,'b');
+gfx_setfont(5,"Arial",14);
+ui_press = (mouse_cap&1) && !(ui_prev_cap&1);
+ui_right_press = (mouse_cap&2) && !(ui_prev_cap&2);
+!(mouse_cap&1) && (ui_prev_cap&1) && ui_drag > 0 ? (
+  slider_automate(2^(ui_drag-1),1);
+  ui_drag=0;
+);
+
+eddy_badge(51,53);
+label_at(88,22,"PODSHERPA",2,0.42,0.65,0.86);
+label_at(86,40,"Eddy",1,0.85,0.92,0.99);
+label_at(193,55,"DYNAMIC RESONANCE SUPPRESSOR",2,0.46,0.58,0.70);
+label_at(854,31,"v0.1.0  /  PROTOTYPE",2,0.46,0.58,0.70);
+button(696,48,112,"HEAR REMOVED",slider10 >= 0.5) ? (
+  slider10 = 1-slider10;param_notify(10);
+);
+button(822,48,150,slider11 >= 0.5 ? "BYPASSED" : "PROCESSING",slider11 < 0.5) ? (
+  slider11 = 1-slider11;param_notify(11);
+);
+gfx_set(0.10,0.17,0.24,1);gfx_line(28,96,972,96);
+label_at(28,113,"STARTING POINTS",2,0.46,0.58,0.70);
+button(226,105,168,"Gentle voice",0) ? apply_starting_point(0);
+button(406,105,168,"Harshness",0) ? apply_starting_point(1);
+button(586,105,168,"Nasal",0) ? apply_starting_point(2);
+button(766,105,206,"Low-mid",0) ? apply_starting_point(3);
+
+// Main Amount control: vertical drag, mouse wheel, right-click to reset.
+cx=125;cy=256;cr=67;
+gfx_set(0.060,0.098,0.146,1);gfx_circle(cx,cy,cr,1,1);
+gfx_set(0.12,0.22,0.32,1);gfx_circle(cx,cy,cr,0,1);
+angle = (0.75+1.5*slider1/100)*$pi;
+gfx_set(0.44,0.72,0.99,1);
+i=0;
+loop(max(1,floor(slider1)),
+  arc_a = (0.75+1.5*i/100)*$pi;
+  arc_b = (0.75+1.5*(i+1)/100)*$pi;
+  gfx_line(cx+cos(arc_a)*(cr+6),cy+sin(arc_a)*(cr+6),cx+cos(arc_b)*(cr+6),cy+sin(arc_b)*(cr+6),1);
+  i+=1;
+);
+gfx_line(cx+cos(angle)*(cr-17),cy+sin(angle)*(cr-17),cx+cos(angle)*(cr-4),cy+sin(angle)*(cr-4),1);
+gfx_setfont(4);gfx_set(0.85,0.93,1,1);
+gfx_x=cx-cr;gfx_y=cy-24;sprintf(#num,"%.0f",slider1);gfx_drawstr(#num,5,cx+cr,cy+28);
+label_at(94,344,"AMOUNT",2,0.57,0.70,0.82);
+label_at(47,370,"Drag up / down to adjust",2,0.40,0.52,0.64);
+ui_press && hit(40,175,170,160) ? (
+  ui_drag=1;ui_drag_y=mouse_y;ui_drag_value=slider1;
+);
+ui_drag == 1 && (mouse_cap&1) ? (
+  slider1 = min(100,max(0,floor(ui_drag_value+(ui_drag_y-mouse_y)*0.6+0.5)));
+  param_notify(1);
+);
+hit(40,175,170,160) && mouse_wheel != 0 ? (
+  slider1=min(100,max(0,slider1+mouse_wheel/120));mouse_wheel=0;param_notify(1);
+);
+ui_right_press && hit(40,175,170,160) ? (slider1=45;param_notify(1););
+
+// Logarithmic spectrum and gain-reduction display. All plotted cuts are positive.
+gx=247;gy=177;gw=725;gh=190;
+gfx_set(0.045,0.075,0.113,1);gfx_rect(gx,gy,gw,gh);
+plot_hi = min(22000,srate*0.49);
+plot_log = log(plot_hi/80);
+range_x1 = gx+gw*max(0,min(1,log(max(80,min(slider4,slider5))/80)/plot_log));
+range_x2 = gx+gw*max(0,min(1,log(max(80,max(slider4,slider5))/80)/plot_log));
+// Host automation can reverse the endpoints. Drag the slider that owns the
+// visible edge, without jumping on grab or crossing the other endpoint.
+distance_low = abs(mouse_x-range_x1);
+distance_high = abs(mouse_x-range_x2);
+near_range = mouse_y >= gy && mouse_y <= gy+gh && min(distance_low,distance_high) <= 10;
+pick_low = distance_low == distance_high ? mouse_x < range_x2 : distance_low < distance_high;
+ui_press && near_range ? (
+  low_slider = slider4 <= slider5 ? 4 : 5;
+  ui_range_low = pick_low;
+  ui_drag = pick_low ? low_slider : 9-low_slider;
+  ui_range_grab_x = mouse_x;
+  ui_range_edge_x = pick_low ? range_x1 : range_x2;
+  ui_range_anchor = slider(ui_drag);
+  ui_range_moved = 0;
+  ui_graph_drag = 1;
+);
+!(mouse_cap&1) ? ui_graph_drag=0;
+ui_graph_drag && (ui_range_moved || mouse_x != ui_range_grab_x) ? (
+  ui_range_moved = 1;
+  range_freq = mouse_x == ui_range_grab_x ? ui_range_anchor :
+    floor(80*exp(max(0,min(1,(ui_range_edge_x+mouse_x-ui_range_grab_x-gx)/gw))*plot_log)+0.5);
+  range_other = slider(9-ui_drag);
+  range_min = ui_drag == 4 ? 80 : 100;
+  range_max = ui_drag == 4 ? 18000 : 22000;
+  ui_range_low ? range_max=min(range_max,range_other) : range_min=max(range_min,range_other);
+  range_freq = min(range_max,max(range_min,range_freq));
+  range_freq != slider(ui_drag) ? (
+    slider(ui_drag) = range_freq;
+    param_notify(ui_drag);
+  );
+  range_x1 = gx+gw*max(0,min(1,log(min(slider4,slider5)/80)/plot_log));
+  range_x2 = gx+gw*max(0,min(1,log(max(slider4,slider5)/80)/plot_log));
+);
+gfx_set(0.10,0.23,0.36,0.22);gfx_rect(range_x1,gy,range_x2-range_x1,gh);
+i=0;
+loop(5,
+  f = i==0 ? 100 : i==1 ? 500 : i==2 ? 1000 : i==3 ? 5000 : 10000;
+  x = gx+gw*log(f/80)/plot_log;
+  gfx_set(0.11,0.17,0.23,1);gfx_line(x,gy,x,gy+gh);
+  gfx_x=x-12;gfx_y=gy+gh+9;gfx_set(0.40,0.53,0.65,1);gfx_setfont(2);
+  f >= 1000 ? gfx_printf("%gk",f/1000) : gfx_printf("%g",f);
+  i+=1;
+);
+i=0;
+loop(5,
+  y=gy+gh*i/4;
+  gfx_set(0.105,0.16,0.22,1);gfx_line(gx,y,gx+gw,y);
+  gfx_set(0.39,0.54,0.68,1);gfx_setfont(2);gfx_x=gx-31;gfx_y=y-6;gfx_printf("-%g",i*3);
+  i+=1;
+);
+prev_sx=gx;prev_sy=gy+gh;prev_ry=gy;
+i=0;
+loop(floor(gw),
+  f=80*exp(i/gw*plot_log);
+  bin=min(K,max(0,f*N/srate));
+  b=floor(bin);frac=bin-b;
+  db=spectrum_db[b]*(1-frac)+spectrum_db[min(K,b+1)]*frac;
+  gr=reduction_db[b]*(1-frac)+reduction_db[min(K,b+1)]*frac;
+  gr *= current_mix*(1-current_bypass);
+  sy=gy+gh*(1-min(1,max(0,(db+100)/100)));
+  ry=gy+gh*min(1,gr/12);
+  sx=gx+i;
+  gfx_set(0.24,0.35,0.46,0.82);gfx_line(prev_sx,prev_sy,sx,sy,1);
+  gfx_set(0.28,0.56,0.84,0.22);gfx_line(sx,gy,sx,ry,0);
+  gfx_set(0.45,0.74,1,1);gfx_line(prev_sx,prev_ry,sx,ry,1);
+  prev_sx=sx;prev_sy=sy;prev_ry=ry;
+  i+=1;
+);
+range_handle(range_x1,gy,gh,ui_graph_drag ? ui_range_low : near_range && pick_low);
+range_handle(range_x2,gy,gh,ui_graph_drag ? !ui_range_low : near_range && !pick_low);
+label_at(gx,153,"CUT dB",2,0.47,0.69,0.90);
+label_at(gx+63,153,"DRAG RANGE EDGES",2,0.46,0.60,0.73);
+label_at(gx+486,153,"INPUT SPECTRUM",2,0.39,0.51,0.63);
+label_at(gx+617,153,"REDUCTION",2,0.47,0.73,0.98);
+gfx_setfont(5);gfx_set(0.65,0.80,0.94,1);gfx_x=gx;gfx_y=397;
+gfx_printf("Peak spectral cut: %.1f dB",frame_peak_cut*current_mix*(1-current_bypass));
+label_at(681,398,"Stereo linked  /  4096-point analysis",2,0.40,0.52,0.64);
+
+cw=225;
+parameter(2,28,439,cw,"MAXIMUM CUT",0,12,0.1,0,3,"dB");
+parameter(3,268,439,cw,"SELECTIVITY",0,18,0.1,0,9,"dB");
+parameter(4,508,439,cw,"RANGE LOW",80,18000,1,1,1000,"Hz");
+parameter(5,748,439,cw,"RANGE HIGH",100,22000,1,1,9000,"Hz");
+parameter(6,28,541,cw,"ATTACK",5,200,1,0,30,"ms");
+parameter(7,268,541,cw,"RELEASE",40,1000,1,0,180,"ms");
+parameter(8,508,541,cw,"MIX",0,100,1,0,100,"%");
+parameter(9,748,541,cw,"OUTPUT",-12,12,0.1,0,0,"dB");
+gfx_setfont(2);gfx_set(0.37,0.49,0.61,1);gfx_x=28;gfx_y=646;
+gfx_printf("Editing / mixing   |   %.1f ms latency (host compensated)   |   Right-click a control to reset",N/srate*1000);
+ui_prev_cap=mouse_cap;

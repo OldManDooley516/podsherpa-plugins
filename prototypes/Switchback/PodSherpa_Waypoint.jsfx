@@ -1,0 +1,388 @@
+desc:PodSherpa Switchback
+tags:utility stereo mono polarity
+version:0.1.1
+
+in_pin:Left input
+in_pin:Right input
+out_pin:Left output
+out_pin:Right output
+
+slider1:swap_channels=0<0,1,1{Normal,Swapped}>-Channel order
+slider2:mono_output=0<0,1,1{Stereo,Mono}>-Output
+slider3:polarity=0<0,3,1{Normal,Invert L,Invert R,Invert Both}>-Input polarity
+slider4:width_percent=100<0,200,1>-Width (%)
+
+@init
+function update_targets() local(width, direct, cross, left_sign, right_sign) (
+  last_swap = swap_channels;
+  last_mono = mono_output;
+  last_polarity = polarity;
+  last_width = width_percent;
+
+  width = mono_output >= 0.5 ? 0 : width_percent * 0.01;
+  swap_channels >= 0.5 ? width = -width;
+  direct = 0.5 * (1 + width);
+  cross = 1 - direct;
+
+  left_sign = (polarity & 1) ? -1 : 1;
+  right_sign = (polarity & 2) ? -1 : 1;
+
+  target_ll = direct * left_sign;
+  target_lr = cross * right_sign;
+  target_rl = cross * left_sign;
+  target_rr = direct * right_sign;
+);
+
+ramp_samples = max(1, floor(srate * 0.005 + 0.5));
+update_targets();
+current_ll = target_ll;
+current_lr = target_lr;
+current_rl = target_rl;
+current_rr = target_rr;
+remaining = 0;
+
+// Leave enough room between the displayed history and the audio writer.
+scope_buffer = 8192;
+scope_mask = 4095;
+scope_stride = max(1, floor(srate / 6000 + 0.5));
+scope_span = max(1, floor(0.30 * srate / scope_stride + 0.5));
+scope_written = 0;
+scope_countdown = 0;
+scope_time = 0;
+correlation_weight = 1 - exp(-1 / (0.12 * srate));
+power_l = power_r = power_lr = 0;
+output_correlation = 2;
+
+@block
+// The panel writes the same parameters that the host automates.
+last_swap != swap_channels || last_mono != mono_output ||
+last_polarity != polarity || last_width != width_percent ? (
+  update_targets();
+  remaining = ramp_samples;
+  step_ll = (target_ll - current_ll) / ramp_samples;
+  step_lr = (target_lr - current_lr) / ramp_samples;
+  step_rl = (target_rl - current_rl) / ramp_samples;
+  step_rr = (target_rr - current_rr) / ramp_samples;
+);
+scope_time = time_precise();
+
+@sample
+remaining > 0 ? (
+  remaining -= 1;
+  remaining > 0 ? (
+    current_ll += step_ll;
+    current_lr += step_lr;
+    current_rl += step_rl;
+    current_rr += step_rr;
+  ) : (
+    current_ll = target_ll;
+    current_lr = target_lr;
+    current_rl = target_rl;
+    current_rr = target_rr;
+  );
+);
+
+left = spl0;
+right = spl1;
+spl0 = current_ll * left + current_lr * right;
+spl1 = current_rl * left + current_rr * right;
+
+// Meter the actual output, including width, polarity and Mono.
+power_l += (spl0 * spl0 - power_l) * correlation_weight;
+power_r += (spl1 * spl1 - power_r) * correlation_weight;
+power_lr += (spl0 * spl1 - power_lr) * correlation_weight;
+
+scope_countdown -= 1;
+scope_countdown <= 0 ? (
+  // Vary the sampling interval so a steady tone cannot lock to one phase.
+  scope_countdown = max(1, scope_stride + floor(rand(3)) - 1);
+  scope_slot = (scope_written & scope_mask) * 2;
+  scope_buffer[scope_slot] = (spl0 - spl1) * 0.5;
+  scope_buffer[scope_slot + 1] = (spl0 + spl1) * 0.5;
+  output_correlation = min(power_l, power_r) > 0.0000000001
+    ? min(1, max(-1, power_lr / sqrt(power_l * power_r))) : 2;
+  scope_written += 1;
+);
+
+@gfx 680 533
+function color(rgb) (
+  gfx_set(((rgb >> 16) & 255) / 255, ((rgb >> 8) & 255) / 255,
+          (rgb & 255) / 255, 1);
+);
+
+function box(x, y, w, h, rgb) (
+  color(rgb);
+  gfx_rect(ui_x + x * ui_scale, ui_y + y * ui_scale, w * ui_scale, h * ui_scale);
+);
+
+function line(x1, y1, x2, y2, rgb) (
+  color(rgb);
+  gfx_line(ui_x + x1 * ui_scale, ui_y + y1 * ui_scale,
+           ui_x + x2 * ui_scale, ui_y + y2 * ui_scale, 1);
+);
+
+function circle(x, y, radius, filled, rgb) (
+  color(rgb);
+  gfx_circle(ui_x + x * ui_scale, ui_y + y * ui_scale, radius * ui_scale, filled, 1);
+);
+
+function label(value, x, y, size, bold, rgb) (
+  color(rgb);
+  gfx_setfont(1, "Arial", max(1, floor(size * ui_scale + 0.5)), bold ? 'b' : 0);
+  gfx_x = ui_x + x * ui_scale;
+  gfx_y = ui_y + y * ui_scale;
+  gfx_drawstr(value);
+);
+
+function hit(x, y, w, h) (
+  pointer_x >= x && pointer_x < x + w && pointer_y >= y && pointer_y < y + h;
+);
+
+function button(value, x, y, w, h, selected, enabled)
+local(hover, text_w, text_h) (
+  hover = enabled && hit(x, y, w, h);
+  box(x, y, w, h, selected ? mint : hover ? hover_edge : edge);
+  box(x + 1, y + 1, w - 2, h - 2, selected ? mint_fill : hover ? hover_fill : control);
+  color(selected ? mint : enabled ? ink : muted);
+  gfx_setfont(1, "Arial", max(1, floor(14 * ui_scale + 0.5)), 'b');
+  gfx_measurestr(value, text_w, text_h);
+  gfx_x = ui_x + (x + w * 0.5) * ui_scale - text_w * 0.5;
+  gfx_y = ui_y + (y + h * 0.5) * ui_scale - text_h * 0.5;
+  gfx_drawstr(value);
+  mouse_press && hover;
+);
+
+function set_width(value) (
+  value = floor(min(200, max(0, value)) + 0.5);
+  width_percent != value ? (
+    width_percent = value;
+    slider_automate(8);
+  );
+);
+
+// A taller arc reads Mid at the top and Side at the ends.
+function scope_arc(cx, cy, radius, rgb) local(i, angle, x, y, old_x, old_y) (
+  i = 1;
+  old_x = cx - radius;
+  old_y = cy;
+  loop(32,
+    angle = $pi - i * $pi / 32;
+    x = cx + radius * cos(angle);
+    y = cy - radius * sin(angle);
+    line(old_x, old_y, x, y, rgb);
+    old_x = x;
+    old_y = y;
+    i += 1;
+  );
+);
+
+function draw_imaging()
+local(history_end, count, sample_index, slot, peak, scale, side, mid,
+      point_size, correlation, marker, meter_color, status, cx, cy,
+      radius, distance, point_color, raw_side, raw_mid) (
+  box(24, 314, 632, 183, edge);
+  box(25, 315, 630, 181, panel);
+  line(396, 329, 396, 481, edge);
+  label("Output Vectorscope", 44, 330, 16, 1, ink);
+  button("Polar", 243, 324, 63, 26, !scope_xy, 1) ? scope_xy = 0;
+  button("XY", 311, 324, 64, 26, scope_xy, 1) ? scope_xy = 1;
+  box(44, 357, 331, 122, background);
+
+  cx = 210;
+  scope_xy ? (
+    cy = 417;
+    radius = 49;
+    line(cx - radius, cy - radius, cx + radius, cy + radius, edge);
+    line(cx - radius, cy + radius, cx + radius, cy - radius, edge);
+    line(cx - radius, cy, cx + radius, cy, edge);
+    line(cx, cy - radius, cx, cy + radius, hover_edge);
+    label("Side", 57, 411, 12, 0, muted);
+    label("Mid", 218, 364, 12, 0, muted);
+  ) : (
+    cy = 456;
+    radius = 78;
+    scope_arc(cx, cy, radius * 0.33, edge);
+    scope_arc(cx, cy, radius * 0.66, edge);
+    scope_arc(cx, cy, radius, hover_edge);
+    line(cx - radius, cy, cx + radius, cy, edge);
+    line(cx, cy, cx, cy - radius, hover_edge);
+    line(cx, cy, cx - radius * 0.7071, cy - radius * 0.7071, $x987852);
+    line(cx, cy, cx + radius * 0.7071, cy - radius * 0.7071, $x987852);
+    label("MID", 200, 361, 11, 1, muted);
+    label("L SIDE", 78, 450, 11, 1, muted);
+    label("R SIDE", 298, 450, 11, 1, muted);
+  );
+
+  history_end = scope_written;
+  count = time_precise() - scope_time < 0.35 ? min(scope_span, history_end) : 0;
+  sample_index = history_end - count;
+  peak = 0;
+  loop(count,
+    slot = (sample_index & scope_mask) * 2;
+    raw_side = scope_buffer[slot];
+    raw_mid = scope_buffer[slot + 1];
+    distance = scope_xy ? max(abs(raw_side), abs(raw_mid))
+                        : sqrt(raw_side * raw_side + raw_mid * raw_mid);
+    peak = max(peak, distance);
+    sample_index += 1;
+  );
+
+  peak > 0.00003 ? (
+    scale = (radius - 2) / max(0.04, peak);
+    sample_index = history_end - count;
+    point_size = max(1, ui_scale * 1.8);
+    loop(count,
+      slot = (sample_index & scope_mask) * 2;
+      raw_side = scope_buffer[slot];
+      raw_mid = scope_buffer[slot + 1];
+      side = raw_side * scale;
+      mid = raw_mid * scale;
+      !scope_xy && mid < 0 ? (
+        side = -side;
+        mid = -mid;
+      );
+      // The outer sectors mean Side exceeds Mid for this sample.
+      point_color = !scope_xy && abs(side) > abs(mid) ? $xF6B48F : mint;
+      color(point_color);
+      gfx_a = 0.04 + 0.67 * pow((sample_index - history_end + count + 1) / count, 2);
+      gfx_rect(ui_x + (cx + side) * ui_scale, ui_y + (cy - mid) * ui_scale,
+               point_size, point_size);
+      sample_index += 1;
+    );
+  );
+
+  label("Output Correlation", 414, 330, 16, 1, ink);
+  correlation = output_correlation;
+  status = "No signal";
+  meter_color = muted;
+  peak > 0.00003 && correlation <= 1 ? (
+    meter_color = correlation < -0.05 ? $xF6B48F : mint;
+    sprintf(#correlation_readout, "%+.2f", correlation);
+    label(#correlation_readout, 414, 357, 29, 1, meter_color);
+    status = correlation < -0.05 ? "Check in mono" :
+             correlation > 0.95 ? "Channels closely aligned" : "Stereo signal";
+  ) : (
+    label("--", 414, 357, 29, 1, muted);
+    peak > 0.00003 ? status = "One channel is quiet";
+  );
+  box(418, 403, 212, 4, edge);
+  line(418, 411, 418, 415, muted);
+  line(524, 411, 524, 415, muted);
+  line(630, 411, 630, 415, muted);
+  peak > 0.00003 && correlation <= 1 ? (
+    marker = 524 + correlation * 106;
+    box(min(marker, 524), 403, abs(marker - 524), 4, meter_color);
+    circle(marker, 405, 5, 1, meter_color);
+  );
+  label("-1", 412, 419, 12, 0, muted);
+  label("0", 520, 419, 12, 0, muted);
+  label("+1", 623, 419, 12, 0, muted);
+  label(status, 414, 454, 13, 0, meter_color);
+);
+
+ui_scale = min(gfx_w / 680, gfx_h / 533);
+ui_x = (gfx_w - 680 * ui_scale) * 0.5;
+ui_y = (gfx_h - 533 * ui_scale) * 0.5;
+pointer_x = (mouse_x - ui_x) / max(0.0001, ui_scale);
+pointer_y = (mouse_y - ui_y) / max(0.0001, ui_scale);
+mouse_down = mouse_cap & 1;
+mouse_press = mouse_down && !mouse_prev;
+mouse_prev = mouse_down;
+
+background = $x101925;
+panel = $x162232;
+edge = $x334961;
+control = $x1B2B3D;
+hover_edge = $x7190AA;
+hover_fill = $x253D50;
+ink = $xEDF4F9;
+muted = $xA7B8CA;
+mint = $x8DEDC7;
+mint_fill = $x203F3A;
+
+color(background);
+gfx_rect(0, 0, gfx_w, gfx_h);
+
+circle(44, 43, 19, 1, mint_fill);
+circle(44, 43, 19, 0, mint);
+line(34, 37, 54, 49, mint);
+line(34, 49, 54, 37, mint);
+label("Switchback", 73, 23, 30, 1, ink);
+label("Stereo Utility", 75, 56, 15, 0, muted);
+label("PodSherpa", 581, 36, 15, 1, muted);
+
+box(24, 88, 372, 212, edge);
+box(25, 89, 370, 210, panel);
+box(410, 88, 246, 212, edge);
+box(411, 89, 244, 210, panel);
+
+label("Stereo Width", 44, 105, 16, 1, ink);
+button("Reset", 309, 103, 66, 29, 0, !mono_output) ? (
+  set_width(100);
+  slider_automate(8, 1);
+);
+
+mouse_press && !mono_output && hit(45, 193, 327, 31) ? width_drag = 1;
+width_drag ? (
+  mouse_down && !mono_output ? set_width((pointer_x - 51) * 200 / 317) : (
+    width_drag = 0;
+    slider_automate(8, 1);
+  );
+);
+
+sprintf(#width_readout, "%d%%", floor(width_percent + 0.5));
+label(#width_readout, 44, 132, 43, 1, mono_output ? muted : mint);
+track_fill = mono_output ? edge : mint;
+width_x = 51 + width_percent * 317 / 200;
+box(51, 206, 317, 4, edge);
+box(min(width_x, 209.5), 206, abs(width_x - 209.5), 4, track_fill);
+line(51, 215, 51, 220, muted);
+line(210, 215, 210, 220, muted);
+line(368, 215, 368, 220, muted);
+circle(width_x, 208, 7, 1, mono_output ? muted : mint);
+circle(width_x, 208, 2, 1, background);
+label("0%  Mono", 45, 225, 13, 0, muted);
+label("100%  Original", 168, 225, 13, 0, muted);
+label("200%  Wide", 303, 225, 13, 0, muted);
+line(44, 253, 375, 253, edge);
+label(mono_output ? "Mono active. Width setting is held." : "Adjusts the difference between L and R.",
+      44, 266, 13, 0, muted);
+
+label("Output", 425, 104, 16, 1, ink);
+button("Stereo", 425, 126, 100, 31, !mono_output, 1) && mono_output ? (
+  mono_output = 0;
+  slider_automate(2);
+  slider_automate(2, 1);
+);
+button("Mono", 535, 126, 105, 31, mono_output, 1) && !mono_output ? (
+  mono_output = 1;
+  slider_automate(2);
+  slider_automate(2, 1);
+);
+
+label("Channel Order", 425, 166, 16, 1, ink);
+button("Normal", 425, 188, 100, 31, !swap_channels, 1) && swap_channels ? (
+  swap_channels = 0;
+  slider_automate(1);
+  slider_automate(1, 1);
+);
+button("Swap L/R", 535, 188, 105, 31, swap_channels, 1) && !swap_channels ? (
+  swap_channels = 1;
+  slider_automate(1);
+  slider_automate(1, 1);
+);
+
+label("Input Polarity", 425, 228, 16, 1, ink);
+button("Invert L", 425, 250, 100, 31, polarity & 1, 1) ? (
+  polarity = polarity ~ 1;
+  slider_automate(4);
+  slider_automate(4, 1);
+);
+button("Invert R", 535, 250, 105, 31, polarity & 2, 1) ? (
+  polarity = polarity ~ 2;
+  slider_automate(4);
+  slider_automate(4, 1);
+);
+
+draw_imaging();
+label("S O U T H E R N   D I G I T A L", 24, 508, 10, 1, muted);
