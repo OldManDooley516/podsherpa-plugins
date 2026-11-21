@@ -454,9 +454,9 @@ public:
             const bool showValues = hover || dragging;
             g.setColour (showValues ? theme.text : theme.dim);
             g.setFont (type::font (type::support, showValues));
-            juce::String line = "Compression curve";
+            juce::String line = module.getCurveTitle();
             if (showValues) line = valuesLine();
-            else if (draggable()) line = "Compression curve. Drag the dot to set it.";
+            else if (draggable()) line = module.getCurveTitle() + ". Drag the dot to set it.";
             g.drawFittedText (line, outer.removeFromTop (20), juce::Justification::centredLeft, 1, 0.9f);
         }
 
