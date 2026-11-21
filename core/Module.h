@@ -62,6 +62,9 @@ public:
         such control (the high-pass has no gain). Dragging a band that is off turns it on. */
     struct CurveHandle { juce::String name, shortName; int freq = -1, gain = -1, q = -1, on = -1; };
     virtual std::vector<CurveHandle> getCurveHandles() const { return {}; }
+    /** A choice parameter whose value is 0 for off, or handle index + 1 to hear only that
+        handle's band. The curve sets it while a dot is Alt/Option-dragged. -1: none. */
+    virtual int getListenParam() const { return -1; }
 
     /** A module that wants a spectrum display behind its curve. The slot then keeps the latest
         8192 samples going in and coming out (SpectrumTap) and the editor draws both. Only the

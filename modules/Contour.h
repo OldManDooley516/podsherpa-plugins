@@ -9,14 +9,18 @@ namespace ps
     block, and a linear-phase mode that applies the same curve with a 2048-sample delay.
 
     Difference from the JSFX: the Phase switch is read when playback is prepared, so changing it
-    takes effect at the next start (the JSFX switches live). Not carried over yet: per-band
-    Listen. Input and output gain
+    takes effect at the next start (the JSFX switches live). Listen (Nov 21) plays only the
+    part of the input one band works on, as the JSFX does: a band-pass at a bell's frequency and
+    width, the low-pass twin of the high-pass (exactly what it removes, as Dropoff 0.4.1 does it),
+    or a high-pass at the shelf's corner. Band gain is ignored, so a band can be listened to
+    before it is set. Switching crossfades through the EQ in 10 ms, and in Linear mode the
+    listened signal is delayed to match, so nothing jumps in time. Input and output gain
     and the bypass crossfade are handled by the shared core. */
 class Contour : public Module
 {
 public:
     enum { pHpFreq, pHpSlope, pHpOn, pB2Freq, pB2Gain, pB2Q, pB2On, pB3Freq, pB3Gain, pB3Q, pB3On,
-           pB4Freq, pB4Gain, pB4Q, pB4On, pShelfFreq, pShelfGain, pShelfOn, pPhase };
+           pB4Freq, pB4Gain, pB4Q, pB4On, pShelfFreq, pShelfGain, pShelfOn, pPhase, pListen };
     Contour() : Module ({
         ParamSpec::number ("hp.freq", "High-pass", "Hz", 20.0f, 500.0f, 80.0f, true, 0).says ("Everything below this is rolled off. Rumble, footsteps and handling noise live down here."),
         ParamSpec::choice ("hp.slope", "High-pass slope", { "6 dB/oct", "12 dB/oct", "18 dB/oct", "24 dB/oct" }, 1).says ("How sharply the high-pass cuts. Steeper removes more but can thin a deep voice."),
@@ -36,7 +40,9 @@ public:
         ParamSpec::number ("shelf.freq", "High shelf", "Hz", 20.0f, 20000.0f, 10000.0f, true, 0).says ("Where the high shelf starts. Everything above it is lifted or dropped together."),
         ParamSpec::number ("shelf.gain", "High shelf gain", "dB", -18.0f, 18.0f, 0.0f).says ("Boost for air and openness, cut to take the top off a bright recording."),
         ParamSpec::toggle ("shelf.on", "High shelf on", true).says ("Turn the high shelf on or off."),
-        ParamSpec::choice ("phase", "Phase", { "Natural (0 ms)", "Linear (43 ms)" }, 0).says ("Linear keeps the timing of the voice exact but adds delay. Minimum adds no delay at all.") }) {}
+        ParamSpec::choice ("phase", "Phase", { "Natural (0 ms)", "Linear (43 ms)" }, 0).says ("Linear keeps the timing of the voice exact but adds delay. Natural adds no delay at all."),
+        ParamSpec::choice ("listen", "Listen", { "Off", "High-pass", "Band 2", "Band 3", "Band 4", "High shelf" }, 0).notSaved()
+            .says ("Play only the part of the voice one band works on, to find what to change. Always off when a project opens.") }) {}
     juce::String getModuleId() const override { return "contour"; }
     juce::String getDisplayName() const override { return "Contour"; }
     juce::String getSubtitle() const override { return "Voice EQ"; }
@@ -44,9 +50,11 @@ public:
     int getLatencySamples() const override { return linear ? LinearPhase::latency : 0; }
     int getMaxLatencySamples() const override { return LinearPhase::latency; }
 
-    void prepare (double sr, int, int channels) override
+    void prepare (double sr, int maxBlock, int channels) override
     {
         sampleRate = sr; numChannels = juce::jmin (channels, (int) maxChannels);
+        dryBuf.setSize (maxChannels, juce::jmax (1, maxBlock));
+        listenDelay.setSize (maxChannels, LinearPhase::latency);
         linear = getParam (pPhase) >= 0.5f;
         fir.prepare (numChannels);
         reset();
@@ -56,10 +64,26 @@ public:
         for (auto& z : state) z.fill (0.0);
         for (int i = 0; i < 18; ++i) sm[i] = getParam (i);
         build(); fir.reset(); lastCheck = -1.0;
+        resetListen();
     }
     void process (juce::AudioBuffer<float>& b) override
     {
         const int n = b.getNumSamples(), nc = juce::jmin (b.getNumChannels(), numChannels);
+        // Listen needs the input as it was; keep a copy only while Listen is on or fading.
+        const int wantListen = (int) std::floor (getParam (pListen) + 0.5f);
+        const bool listening = wantListen != 0 || listenBand != 0;
+        if (listening)
+        {
+            if (dryBuf.getNumSamples() < n) dryBuf.setSize (maxChannels, n, false, false, true);   // a host that broke its promise
+            for (int c = 0; c < nc; ++c) dryBuf.copyFrom (c, 0, b, c, 0, n);
+        }
+        processEq (b, n, nc);
+        if (listening) processListen (b, n, nc, wantListen);
+    }
+
+private:
+    void processEq (juce::AudioBuffer<float>& b, int n, int nc)
+    {
         // Phase follows the control while playing. Both paths are always prepared, so the
         // switch only clears the state the other one left behind; the host is told about the
         // latency change by the plugin wrapper.
@@ -107,6 +131,7 @@ public:
         }
     }
 
+public:
     /** Factory presets from the JSFX. Values in parameter order, without Phase. */
     struct Preset { const char* name; float v[18]; };
     static const std::array<Preset, 6>& factoryPresets()
@@ -139,6 +164,7 @@ public:
                  { "Band 4", "4", pB4Freq, pB4Gain, pB4Q, pB4On },
                  { "High shelf", "HS", pShelfFreq, pShelfGain, -1, pShelfOn } };
     }
+    int getListenParam() const override { return pListen; }
 
     /** |H(e^jw)| of every active stage, multiplied, in dB. Built from the controls with the same
         filter design the audio path uses, so the curve is the real response, and it follows a
@@ -171,7 +197,8 @@ private:
     static constexpr int maxChannels = 8;
     using Coef = std::array<double, 5>;
     using Coefs = std::array<Coef, 6>; using Active = std::array<bool, 6>;
-    static void set (Coefs& cf, Active& on, int i, double b0, double b1, double b2, double a0, double a1, double a2)
+    template <typename C, typename A>
+    static void set (C& cf, A& on, int i, double b0, double b1, double b2, double a0, double a1, double a2)
     {
         const double ia = 1.0 / a0; cf[(size_t) i] = { b0 * ia, b1 * ia, b2 * ia, a1 * ia, a2 * ia }; on[(size_t) i] = true;
     }
@@ -214,6 +241,83 @@ private:
         if (std::abs (ge) > 0.01) hshelf (5, v[15], ge); else ident (cf, on, 5);
     }
     void build() { design (sm, sampleRate, cf, active); }
+    //==========================================================================
+    void resetListen()
+    {
+        for (auto& z : lz) z.fill (0.0);
+        listenDelay.clear(); listenPos = 0; listenBand = 0; listenGain = 0.0;
+    }
+
+    /** The filter Listen plays for a band, from the smoothed controls so a band being swept
+        is heard moving. Stages are reused from the EQ's own design helpers. */
+    void designListen (int band)
+    {
+        lactive.fill (false);
+        const double pi = juce::MathConstants<double>::pi, sr = sampleRate;
+        auto omega = [&] (double f) { return 2.0 * pi * juce::jmin (f, sr * 0.45) / sr; };
+        auto lp1 = [&] (int i, double f) { const double K = std::tan (pi * juce::jmin (f, sr * 0.45) / sr); set (lc, lactive, i, K, K, 0.0, 1.0 + K, K - 1.0, 0.0); };
+        auto lp2 = [&] (int i, double f, double Q) { const double w0 = omega (f), c = std::cos (w0), al = std::sin (w0) / (2.0 * Q); set (lc, lactive, i, (1.0 - c) / 2.0, 1.0 - c, (1.0 - c) / 2.0, 1.0 + al, -2.0 * c, 1.0 - al); };
+        auto hp2 = [&] (int i, double f, double Q) { const double w0 = omega (f), c = std::cos (w0), al = std::sin (w0) / (2.0 * Q); set (lc, lactive, i, (1.0 + c) / 2.0, -(1.0 + c), (1.0 + c) / 2.0, 1.0 + al, -2.0 * c, 1.0 - al); };
+        auto bp = [&] (int i, double f, double Q) { const double w0 = omega (f), c = std::cos (w0), al = std::sin (w0) / (2.0 * Q); set (lc, lactive, i, al, 0.0, -al, 1.0 + al, -2.0 * c, 1.0 - al); };
+        if (band == 1)
+        {   // the low-pass twin of the high-pass, same corner and slope
+            const int sl = (int) std::floor (sm[1] + 0.5);
+            if (sl == 0) lp1 (0, sm[0]);
+            else if (sl == 1) lp2 (0, sm[0], 0.70711);
+            else if (sl == 2) { lp1 (0, sm[0]); lp2 (1, sm[0], 1.0); }
+            else { lp2 (0, sm[0], 0.5412); lp2 (1, sm[0], 1.30656); }
+        }
+        else if (band >= 2 && band <= 4) bp (0, sm[3 + 4 * (band - 2)], sm[5 + 4 * (band - 2)]);
+        else if (band == 5) hp2 (0, sm[15], 0.70711);
+    }
+
+    /** Replaces the EQ's output with the listened band. Changing band fades to the EQ and back
+        (10 ms each way) so the filter can start clean; turning Listen off fades to the EQ. */
+    void processListen (juce::AudioBuffer<float>& b, int n, int nc, int want)
+    {
+        const double step = 1.0 / (0.010 * sampleRate);
+        const int lat = linear ? LinearPhase::latency : 0;
+        if (listenBand != 0) designListen (listenBand);
+        for (int i = 0; i < n; ++i)
+        {
+            if (want != listenBand)
+            {
+                listenGain -= step;
+                if (listenGain <= 0.0)
+                {
+                    listenGain = 0.0; listenBand = want;
+                    for (auto& z : lz) z.fill (0.0);
+                    listenDelay.clear(); listenPos = 0;
+                    if (listenBand != 0) designListen (listenBand);
+                }
+            }
+            else if (listenBand != 0) listenGain = juce::jmin (1.0, listenGain + step);
+            if (listenBand == 0) continue;
+            for (int c = 0; c < nc; ++c)
+            {
+                double y = dryBuf.getSample (c, i);
+                auto& z = lz[(size_t) c];
+                for (int k = 0; k < 2; ++k)
+                    if (lactive[(size_t) k])
+                    {
+                        const auto& q = lc[(size_t) k];
+                        const double t = q[0] * y + z[(size_t) (2 * k)];
+                        z[(size_t) (2 * k)] = q[1] * y - q[3] * t + z[(size_t) (2 * k + 1)];
+                        z[(size_t) (2 * k + 1)] = q[2] * y - q[4] * t;
+                        y = t;
+                    }
+                if (lat > 0)
+                {   // line the listened signal up with the linear-phase EQ's delay
+                    float* d = listenDelay.getWritePointer (c);
+                    const double out = d[listenPos]; d[listenPos] = (float) y; y = out;
+                }
+                const double eq = b.getSample (c, i);
+                b.setSample (c, i, (float) (eq + (y - eq) * listenGain));
+            }
+            if (lat > 0 && ++listenPos >= lat) listenPos = 0;
+        }
+    }
+
     void designFir()
     {
         fir.design ([this] (int k)
@@ -235,5 +339,10 @@ private:
     std::array<Coef, 6> cf {}; std::array<bool, 6> active {};
     std::array<std::array<double, 12>, maxChannels> state {};
     LinearPhase fir;
+    // Listen
+    juce::AudioBuffer<float> dryBuf, listenDelay;
+    std::array<Coef, 2> lc {}; std::array<bool, 2> lactive {};
+    std::array<std::array<double, 4>, maxChannels> lz {};
+    int listenBand = 0, listenPos = 0; double listenGain = 0.0;
 };
 } // namespace ps

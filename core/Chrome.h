@@ -535,15 +535,19 @@ public:
     {
         auto outer = getLocalBounds();
         auto head = outer.removeFromTop (headerH);
-        g.setFont (type::font (type::support, active >= 0));
-        g.setColour (active >= 0 ? theme.text : theme.dim);
+        const int heard = listeningTo();
+        g.setFont (type::font (type::support, active >= 0 || heard >= 0));
+        g.setColour (active >= 0 ? theme.text : heard >= 0 ? theme.warn : theme.dim);
         {
             // While a dot is hovered or held, its values; otherwise how to use the dots. The hint
             // stays on screen, as the standard asks, rather than living only in a tooltip.
             auto textArea = head.withTrimmedBottom (4).withTrimmedRight (module.hasSpectrum() ? viewSwitch.getWidth() + 130 : 0);
             juce::String line = "Response";
             if (active >= 0) line = readout (active);
-            else if (! handles.empty()) line = "Drag a dot: up boosts, down cuts. Scroll for width, Shift for fine.";
+            else if (heard >= 0) line = "Listening to " + handles[(size_t) heard].name + " only";
+            else if (! handles.empty())
+                line = juce::String ("Drag dots to shape. Shift: fine. Scroll: width. ")
+                     + (juce::SystemStats::getOperatingSystemType() & juce::SystemStats::MacOSX ? "Option" : "Alt") + "-drag: hear the band.";
             g.drawFittedText (line, textArea, juce::Justification::centredLeft, 1, 0.9f);
         }
 
@@ -643,6 +647,11 @@ public:
                 g.setColour (theme.accent.withAlpha (0.3f));
                 g.fillEllipse (dot.expanded (5.0f));
             }
+            if (i == heard)
+            {   // the band being heard: an amber ring, with the words in the header line
+                g.setColour (theme.warn);
+                g.drawEllipse (dot.expanded (4.0f), 2.5f);
+            }
             if (on)
             {
                 g.setColour (theme.accent);
@@ -694,6 +703,13 @@ public:
         }
         dragging = true;
         lastPos = e.position;
+        if (e.mods.isAltDown())
+            if (auto* l = param (module.getListenParam()))
+            {   // hear only this band while it is held, so it can be swept to find a problem
+                listenBefore = l->getReal();
+                l->beginChangeGesture(); l->setRealNotifyingHost ((float) (h + 1));
+                heldListen = true;
+            }
         const auto& hd = handles[(size_t) h];
         for (int id : { hd.freq, hd.gain }) if (auto* p = param (id)) p->beginChangeGesture();
         if (auto* on = param (hd.on); on != nullptr && on->getReal() < 0.5f)
@@ -726,6 +742,12 @@ public:
             const auto& hd = handles[(size_t) active];
             for (int id : { hd.freq, hd.gain }) if (auto* p = param (id)) p->endChangeGesture();
         }
+        if (heldListen)
+            if (auto* l = param (module.getListenParam()))
+            {   // put Listen back the way it was before the Alt-drag
+                l->setRealNotifyingHost (listenBefore); l->endChangeGesture();
+            }
+        heldListen = false;
         dragging = false;
         setActive (hit (e.position));
     }
@@ -862,7 +884,16 @@ private:
     std::vector<Module::CurveHandle> handles;
     juce::Point<float> lastPos;
     int active = -1;
-    bool dragging = false;
+    bool dragging = false, heldListen = false;
+    float listenBefore = 0.0f;
+
+    /** The handle Listen is playing, or -1. */
+    int listeningTo() const
+    {
+        auto* l = param (module.getListenParam());
+        const int v = l != nullptr ? juce::roundToInt (l->getReal()) : 0;
+        return v >= 1 && v <= (int) handles.size() ? v - 1 : -1;
+    }
     const std::array<float, SpectrumAnalyser::numBands>* specIn = nullptr;
     const std::array<float, SpectrumAnalyser::numBands>* specOut = nullptr;
     int view = 2;
