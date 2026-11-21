@@ -57,6 +57,12 @@ public:
     virtual bool hasFrequencyResponse() const { return false; }
     virtual float responseDbAt (float) const { return 0.0f; }
 
+    /** Dots on the response curve that can be grabbed: each names the parameters it moves.
+        Sideways moves freq, up and down moves gain, the wheel moves q; -1 where a band has no
+        such control (the high-pass has no gain). Dragging a band that is off turns it on. */
+    struct CurveHandle { juce::String name, shortName; int freq = -1, gain = -1, q = -1, on = -1; };
+    virtual std::vector<CurveHandle> getCurveHandles() const { return {}; }
+
     /** A module that wants a spectrum display behind its curve. The slot then keeps the latest
         8192 samples going in and coming out (SpectrumTap) and the editor draws both. Only the
         copy happens on the audio thread; the FFT runs in the editor. */

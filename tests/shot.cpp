@@ -55,6 +55,9 @@ int main (int argc, char** argv)
 
     SinglePluginProcessor proc (std::move (module));
     proc.prepareToPlay (48000.0, 512);
+    // PS_SHOT_PRESET=<n> renders with factory preset n, to see a curve that is not flat.
+    if (const auto pre = juce::SystemStats::getEnvironmentVariable ("PS_SHOT_PRESET", {}); pre.isNotEmpty())
+        proc.setCurrentProgram (pre.getIntValue());
 
     // Push a little audio through so the meters are not sitting at the floor in the shot.
     {
@@ -116,6 +119,37 @@ int main (int argc, char** argv)
             se->tickForShot();
         }
     }
+
+    // PS_SHOT_DRAG=<dot>,<dx>,<dy>[,shift] drags a curve dot with real mouse events, then
+    // leaves the mouse over it, so the drag code and the hover readout can be checked headless.
+    if (const auto drag = juce::SystemStats::getEnvironmentVariable ("PS_SHOT_DRAG", {}); drag.isNotEmpty())
+        if (auto* se = dynamic_cast<SinglePluginEditor*> (ed.get()))
+            if (auto* rc = se->responseForShot())
+            {
+                const auto parts = juce::StringArray::fromTokens (drag, ",", {});
+                const int dot = parts[0].getIntValue();
+                const float dx = parts[1].getFloatValue(), dy = parts[2].getFloatValue();
+                const auto mods = parts.size() > 3 ? juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier)
+                                                   : juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier);
+                auto src = juce::Desktop::getInstance().getMainMouseSource();
+                const auto t0 = juce::Time::getCurrentTime();
+                auto ev = [&] (juce::Point<float> p, juce::ModifierKeys m)
+                {
+                    return juce::MouseEvent (src, p, m, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, rc, rc, t0, rc->handlePositionForShot (dot), t0, 1, false);
+                };
+                const auto start = rc->handlePositionForShot (dot);
+                rc->mouseDown (ev (start, mods));
+                for (int k = 1; k <= 10; ++k) rc->mouseDrag (ev (start + juce::Point<float> (dx, dy) * ((float) k / 10.0f), mods));
+                rc->mouseUp (ev (start + juce::Point<float> (dx, dy), juce::ModifierKeys()));
+                rc->mouseMove (ev (rc->handlePositionForShot (dot), juce::ModifierKeys()));
+                juce::MidiBuffer m; juce::AudioBuffer<float> b { 2, 512 }; b.clear();
+                proc.processBlock (b, m);   // the host parameters reach the module on the next block
+                const auto& sp = proc.getModule().getParamSpecs();
+                const auto hd = proc.getModule().getCurveHandles()[(size_t) dot];
+                std::printf ("dragged %s: %s", hd.name.toRawUTF8(), sp[(size_t) hd.freq].text (proc.getModule().getParam (hd.freq)).toRawUTF8());
+                if (hd.gain >= 0) std::printf (", %s", sp[(size_t) hd.gain].text (proc.getModule().getParam (hd.gain)).toRawUTF8());
+                std::printf ("\n");
+            }
 
     juce::Image img { juce::Image::ARGB, w, h, true };
     {

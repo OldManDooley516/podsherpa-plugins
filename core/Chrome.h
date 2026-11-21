@@ -4,6 +4,7 @@
 #include "Meters.h"
 #include "Module.h"
 #include "Spectrum.h"
+#include "HostParam.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 
 namespace ps
@@ -534,9 +535,17 @@ public:
     {
         auto outer = getLocalBounds();
         auto head = outer.removeFromTop (headerH);
-        g.setColour (theme.dim);
-        g.setFont (type::font (type::support));
-        g.drawText ("Response", head.withTrimmedBottom (4), juce::Justification::centredLeft);
+        g.setFont (type::font (type::support, active >= 0));
+        g.setColour (active >= 0 ? theme.text : theme.dim);
+        {
+            // While a dot is hovered or held, its values; otherwise how to use the dots. The hint
+            // stays on screen, as the standard asks, rather than living only in a tooltip.
+            auto textArea = head.withTrimmedBottom (4).withTrimmedRight (module.hasSpectrum() ? viewSwitch.getWidth() + 130 : 0);
+            juce::String line = "Response";
+            if (active >= 0) line = readout (active);
+            else if (! handles.empty()) line = "Drag a dot: up boosts, down cuts. Scroll for width, Shift for fine.";
+            g.drawFittedText (line, textArea, juce::Justification::centredLeft, 1, 0.9f);
+        }
 
         // Legend: the colours never stand alone, each has its word beside it.
         if (module.hasSpectrum() && view > 0)
@@ -619,6 +628,133 @@ public:
 
         g.setColour (theme.line);
         g.drawRoundedRectangle (plot.toFloat().reduced (0.5f), 4.0f, 1.0f);
+
+        // The dots. On: filled with the accent, its number knocked out. Off: an outline with a
+        // dim number, so "off" is shown by shape and word as well as colour. The one under the
+        // mouse grows and gets a ring.
+        for (int i = (int) handles.size() - 1; i >= 0; --i)
+        {
+            const auto c = handleCentre (i);
+            const bool on = isOn (i), hot = i == active;
+            const float r = hot ? dotR + 2.0f : dotR;
+            auto dot = juce::Rectangle<float> (r * 2.0f, r * 2.0f).withCentre (c);
+            if (hot)
+            {
+                g.setColour (theme.accent.withAlpha (0.3f));
+                g.fillEllipse (dot.expanded (5.0f));
+            }
+            if (on)
+            {
+                g.setColour (theme.accent);
+                g.fillEllipse (dot);
+                g.setColour (theme.bg);
+            }
+            else
+            {
+                g.setColour (theme.bg.withAlpha (0.85f));
+                g.fillEllipse (dot);
+                g.setColour (theme.dim);
+                g.drawEllipse (dot.reduced (0.75f), 1.5f);
+            }
+            g.setFont (type::font (handles[(size_t) i].shortName.length() > 1 ? 11.0f : 13.0f, true));
+            g.drawText (handles[(size_t) i].shortName, dot.toNearestInt(), juce::Justification::centred);
+        }
+    }
+
+    //==========================================================================
+    /** The host parameters the dots move. Given by the editor; without them the dots are not
+        drawn (Basecamp's compact cards, for now). Moves go through the host, with gestures, so
+        automation records them and the knobs below follow. */
+    void setHandleParams (std::vector<HostParam*> p)
+    {
+        params = std::move (p);
+        handles = params.empty() ? std::vector<Module::CurveHandle> {} : module.getCurveHandles();
+        repaint();
+    }
+
+    /** For ps_shot: where dot i is drawn, so a scripted drag can start on it. */
+    juce::Point<float> handlePositionForShot (int i) const { return handleCentre (i); }
+
+    void mouseMove (const juce::MouseEvent& e) override { setActive (hit (e.position)); }
+    void mouseExit (const juce::MouseEvent&) override { if (! dragging) setActive (-1); }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        const int h = hit (e.position);
+        setActive (h);
+        if (h < 0) return;
+        if (e.mods.isPopupMenu())   // right-click turns a band on or off
+        {
+            if (auto* on = param (handles[(size_t) h].on))
+            {
+                on->beginChangeGesture(); on->setRealNotifyingHost (on->getReal() >= 0.5f ? 0.0f : 1.0f); on->endChangeGesture();
+                repaint();
+            }
+            return;
+        }
+        dragging = true;
+        lastPos = e.position;
+        const auto& hd = handles[(size_t) h];
+        for (int id : { hd.freq, hd.gain }) if (auto* p = param (id)) p->beginChangeGesture();
+        if (auto* on = param (hd.on); on != nullptr && on->getReal() < 0.5f)
+        {   // grabbing a band that is off brings it in, as dragging it would be pointless otherwise
+            on->beginChangeGesture(); on->setRealNotifyingHost (1.0f); on->endChangeGesture();
+        }
+    }
+
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! dragging || active < 0) return;
+        const auto plot = plotBounds().toFloat();
+        // Moves are relative to the last position, so Shift can be pressed mid-drag without
+        // the dot jumping: fine control is a fifth of the speed.
+        const float speed = e.mods.isShiftDown() ? 0.2f : 1.0f;
+        const float dx = (e.position.x - lastPos.x) * speed, dy = (e.position.y - lastPos.y) * speed;
+        lastPos = e.position;
+        const auto& hd = handles[(size_t) active];
+        if (auto* f = param (hd.freq))
+            f->setRealNotifyingHost (f->getReal() * std::pow (1000.0f, dx / juce::jmax (1.0f, plot.getWidth())));
+        if (auto* gp = param (hd.gain))
+            gp->setRealNotifyingHost (gp->getReal() - dy * 36.0f / juce::jmax (1.0f, plot.getHeight()));
+        repaint();
+    }
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (dragging && active >= 0)
+        {
+            const auto& hd = handles[(size_t) active];
+            for (int id : { hd.freq, hd.gain }) if (auto* p = param (id)) p->endChangeGesture();
+        }
+        dragging = false;
+        setActive (hit (e.position));
+    }
+
+    /** Double-click puts a band back where it started: frequency, gain and width. */
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        const int h = hit (e.position);
+        if (h < 0) return;
+        const auto& hd = handles[(size_t) h];
+        for (int id : { hd.freq, hd.gain, hd.q })
+            if (auto* p = param (id)) { p->beginChangeGesture(); p->setRealNotifyingHost (p->getSpec().def); p->endChangeGesture(); }
+        repaint();
+    }
+
+    /** The wheel over a dot sets its width (Q). One notch is about 10 percent, Shift a fifth
+        of that. Bands without a width ignore it, and the wheel scrolls the window instead. */
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        const int h = hit (e.position);
+        auto* q = h >= 0 ? param (handles[(size_t) h].q) : nullptr;
+        if (q == nullptr) { Component::mouseWheelMove (e, w); return; }
+        const float notches = (w.deltaY != 0.0f ? w.deltaY : w.deltaX) * (w.isReversed ? -1.0f : 1.0f) / 0.25f;
+        const float step = e.mods.isShiftDown() ? 0.02f : 0.1f;
+        q->beginChangeGesture();
+        q->setRealNotifyingHost (q->getReal() * std::pow (1.0f + step, notches));
+        q->endChangeGesture();
+        setActive (h);
+        repaint();
     }
 
     /** Spectrum scale: 0 dBFS at the top of the plot, specFloorDb at the bottom. */
@@ -664,9 +800,69 @@ private:
         g.strokePath (line, juce::PathStrokeType (edge ? 1.4f : 1.0f, juce::PathStrokeType::curved));
     }
 
+    static constexpr float dotR = 11.0f;
+
+    juce::Rectangle<int> plotBounds() const { return getLocalBounds().withTrimmedTop (headerH).reduced (2); }
+
+    HostParam* param (int id) const { return id >= 0 && id < (int) params.size() ? params[(size_t) id] : nullptr; }
+    bool isOn (int i) const { auto* p = param (handles[(size_t) i].on); return p == nullptr || p->getReal() >= 0.5f; }
+
+    /** Where a dot sits: its frequency across, its gain up and down. Bands without a gain (the
+        high-pass) sit on the 0 dB line. Clamped inside the plot so a band at an extreme stays
+        grabbable. */
+    juce::Point<float> handleCentre (int i) const
+    {
+        const auto plot = plotBounds().toFloat();
+        const auto& hd = handles[(size_t) i];
+        const float hz = param (hd.freq) != nullptr ? param (hd.freq)->getReal() : 1000.0f;
+        const float db = param (hd.gain) != nullptr ? param (hd.gain)->getReal() : 0.0f;
+        const float a = (float) (std::log10 (juce::jlimit (20.0, 20000.0, (double) hz) / 20.0) / 3.0);
+        const float x = plot.getX() + plot.getWidth() * a;
+        const float y = plot.getCentreY() - plot.getHeight() * juce::jlimit (-18.0f, 18.0f, db) / 36.0f;
+        return { juce::jlimit (plot.getX() + dotR, plot.getRight() - dotR, x),
+                 juce::jlimit (plot.getY() + dotR, plot.getBottom() - dotR, y) };
+    }
+
+    /** The dot under a point, nearest first; dots are drawn so the lowest number is on top. */
+    int hit (juce::Point<float> p) const
+    {
+        int best = -1; float bestD = (dotR + 5.0f) * (dotR + 5.0f);
+        for (int i = 0; i < (int) handles.size(); ++i)
+        {
+            const float d = handleCentre (i).getDistanceSquaredFrom (p);
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+    }
+
+    void setActive (int i)
+    {
+        if (dragging && i != active) return;   // keep the held dot while the mouse runs ahead of it
+        if (i == active) return;
+        active = i;
+        setMouseCursor (i >= 0 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+
+    juce::String readout (int i) const
+    {
+        const auto& hd = handles[(size_t) i];
+        juce::String t = hd.name;
+        if (auto* f = param (hd.freq)) t << "   " << f->getSpec().text (f->getReal());
+        if (auto* gp = param (hd.gain)) { const float v = gp->getReal(); t << "   " << (v > 0.05f ? "+" : "") << gp->getSpec().text (v); }
+        if (auto* q = param (hd.q)) t << "   Q " << q->getSpec().text (q->getReal());
+        if (! isOn (i)) t << "   (off)";
+        return t;
+    }
+
     const Theme& theme;
     const Module& module;
     Segmented viewSwitch;
+    std::vector<HostParam*> params;
+    std::vector<Module::CurveHandle> handles;
+    juce::Point<float> lastPos;
+    int active = -1;
+    bool dragging = false;
     const std::array<float, SpectrumAnalyser::numBands>* specIn = nullptr;
     const std::array<float, SpectrumAnalyser::numBands>* specOut = nullptr;
     int view = 2;

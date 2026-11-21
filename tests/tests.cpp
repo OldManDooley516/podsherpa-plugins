@@ -72,6 +72,15 @@ static void dump (const juce::File& dir)
         runBlocks (b, block, [&] (auto& v) { d.process (v); });
         writeRaw (dir.getChildFile ("dropoff_s" + juce::String (slope) + ".f32"), b);
     }
+    // Contour: every factory preset, Natural and Linear, with a knob moving mid-file so the
+    // smoothing is exercised. Used to prove interface changes leave the audio bit-identical.
+    for (int pre = 0; pre < (int) Contour::factoryPresets().size(); ++pre) for (int lin = 0; lin < 2; ++lin)
+    {
+        Contour c; c.applyFactoryPreset (pre); c.setParam (Contour::pPhase, (float) lin);
+        c.prepare (sr, block, 2); auto b = in; int pos = 0;
+        runBlocks (b, block, [&] (auto& v) { if ((pos += block) == 24064) c.setParam (Contour::pB3Gain, 4.0f); c.process (v); });
+        writeRaw (dir.getChildFile ("contour_p" + juce::String (pre) + "_l" + juce::String (lin) + ".f32"), b);
+    }
 }
 static void snapshot (juce::AudioProcessor& p, const juce::File& f)
 {
@@ -574,6 +583,29 @@ int main (int argc, char** argv)
         check (worstText >= 4.5, "text stays readable on every Look's surfaces (worst " + juce::String (worstText, 1) + ":1)");
     }
 
+
+
+    std::cout << "Contour curve dots" << std::endl;
+    {
+        // The curve follows the controls even when no audio has run since they moved, which is
+        // what happens when a dot is dragged with the transport stopped.
+        Contour c; c.prepare (sr, block, 2);
+        c.setParam (Contour::pB3Freq, 3200.0f); c.setParam (Contour::pB3Gain, 6.0f);
+        const float at = c.responseDbAt (3200.0f);
+        check (std::abs (at - 6.0f) < 0.05f, "a +6 dB band at 3.2 kHz draws +" + juce::String (at, 2) + " dB with no audio processed");
+
+        // Every dot points at the right kind of control.
+        bool ok = true;
+        const auto& sp = c.getParamSpecs();
+        for (const auto& h : c.getCurveHandles())
+        {
+            ok &= h.freq >= 0 && sp[(size_t) h.freq].unit == "Hz";
+            ok &= h.gain < 0 || sp[(size_t) h.gain].unit == "dB";
+            ok &= h.q < 0 || sp[(size_t) h.q].name.endsWith ("Q");
+            ok &= h.on >= 0 && sp[(size_t) h.on].type == ParamSpec::Type::Bool;
+        }
+        check (ok && c.getCurveHandles().size() == 5, "five dots, each moving its band's frequency, gain, width and on switch");
+    }
 
     std::cout << "Spectrum display" << std::endl;
     {

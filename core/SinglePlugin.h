@@ -253,6 +253,7 @@ public:
         if (p.getModule().hasFrequencyResponse())
         {
             response = std::make_unique<ResponseCurve> (theme, p.getModule());
+            response->setHandleParams (p.getModuleParams());
             if (p.getModule().hasSpectrum())
             {
                 response->setSpectrum (&specIn.getBands(), &specOut.getBands());
@@ -305,6 +306,7 @@ public:
         repaint();
     }
     void tickForShot() { timerCallback(); }
+    ResponseCurve* responseForShot() { return response.get(); }
 
     void paint (juce::Graphics& g) override
     {

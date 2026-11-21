@@ -131,20 +131,33 @@ public:
 
     bool hasFrequencyResponse() const override { return true; }
     bool hasSpectrum() const override { return true; }
+    std::vector<CurveHandle> getCurveHandles() const override
+    {
+        return { { "High-pass", "HP", pHpFreq, -1, -1, pHpOn },
+                 { "Band 2", "2", pB2Freq, pB2Gain, pB2Q, pB2On },
+                 { "Band 3", "3", pB3Freq, pB3Gain, pB3Q, pB3On },
+                 { "Band 4", "4", pB4Freq, pB4Gain, pB4Q, pB4On },
+                 { "High shelf", "HS", pShelfFreq, pShelfGain, -1, pShelfOn } };
+    }
 
-    /** |H(e^jw)| of every active stage, multiplied, in dB. Uses the live coefficients, so the
-        curve follows the controls exactly rather than approximating them. */
+    /** |H(e^jw)| of every active stage, multiplied, in dB. Built from the controls with the same
+        filter design the audio path uses, so the curve is the real response, and it follows a
+        knob or a dragged dot even when the host is not running audio through the plugin. */
     float responseDbAt (float hz) const override
     {
         if (sampleRate <= 0.0) return 0.0f;
         const double w = 2.0 * juce::MathConstants<double>::pi * (double) hz / sampleRate;
         if (w >= juce::MathConstants<double>::pi) return 0.0f;
+        double v[18];
+        for (int i = 0; i < 18; ++i) v[i] = getParam (i);
+        std::array<Coef, 6> c6; std::array<bool, 6> on6;
+        design (v, sampleRate, c6, on6);
         const double cw = std::cos (w), sw = std::sin (w), c2 = std::cos (2.0 * w), s2 = std::sin (2.0 * w);
         double total = 0.0;
-        for (size_t i = 0; i < cf.size(); ++i)
+        for (size_t i = 0; i < c6.size(); ++i)
         {
-            if (! active[i]) continue;
-            const auto& c = cf[i];
+            if (! on6[i]) continue;
+            const auto& c = c6[i];
             const double nr = c[0] + c[1] * cw + c[2] * c2, ni = -(c[1] * sw + c[2] * s2);
             const double dr = 1.0 + c[3] * cw + c[4] * c2, di = -(c[3] * sw + c[4] * s2);
             const double den = dr * dr + di * di;
@@ -157,44 +170,50 @@ public:
 private:
     static constexpr int maxChannels = 8;
     using Coef = std::array<double, 5>;
-    void set (int i, double b0, double b1, double b2, double a0, double a1, double a2)
+    using Coefs = std::array<Coef, 6>; using Active = std::array<bool, 6>;
+    static void set (Coefs& cf, Active& on, int i, double b0, double b1, double b2, double a0, double a1, double a2)
     {
-        const double ia = 1.0 / a0; cf[(size_t) i] = { b0 * ia, b1 * ia, b2 * ia, a1 * ia, a2 * ia }; active[(size_t) i] = true;
+        const double ia = 1.0 / a0; cf[(size_t) i] = { b0 * ia, b1 * ia, b2 * ia, a1 * ia, a2 * ia }; on[(size_t) i] = true;
     }
-    void ident (int i) { cf[(size_t) i] = { 1.0, 0.0, 0.0, 0.0, 0.0 }; active[(size_t) i] = false; }
-    double omega (double f) const { return 2.0 * juce::MathConstants<double>::pi * juce::jmin (f, sampleRate * 0.45) / sampleRate; }
-    void hp1 (int i, double f) { const double K = std::tan (juce::MathConstants<double>::pi * juce::jmin (f, sampleRate * 0.45) / sampleRate); set (i, 1.0, -1.0, 0.0, 1.0 + K, K - 1.0, 0.0); }
-    void hp2 (int i, double f, double Q) { const double w0 = omega (f), c = std::cos (w0), al = std::sin (w0) / (2.0 * Q); set (i, (1.0 + c) / 2.0, -(1.0 + c), (1.0 + c) / 2.0, 1.0 + al, -2.0 * c, 1.0 - al); }
-    void bell (int i, double f, double g, double Q)
+    static void ident (Coefs& cf, Active& on, int i) { cf[(size_t) i] = { 1.0, 0.0, 0.0, 0.0, 0.0 }; on[(size_t) i] = false; }
+
+    /** The filter design, shared by the audio path (smoothed values) and the drawn curve (the
+        controls as set). v holds the 18 parameters in order, without Phase. */
+    static void design (const double* v, double sr, Coefs& cf, Active& on)
     {
-        const double w0 = omega (f), c = std::cos (w0), al = std::sin (w0) / (2.0 * Q), A = std::exp (std::log (10.0) * g / 40.0);
-        set (i, 1.0 + al * A, -2.0 * c, 1.0 - al * A, 1.0 + al / A, -2.0 * c, 1.0 - al / A);
-    }
-    void hshelf (int i, double f, double g)
-    {
-        const double w0 = omega (f), c = std::cos (w0), al = std::sin (w0) / 1.41421, A = std::exp (std::log (10.0) * g / 40.0), sA = 2.0 * std::sqrt (A) * al;
-        set (i, A * ((A + 1.0) + (A - 1.0) * c + sA), -2.0 * A * ((A - 1.0) + (A + 1.0) * c), A * ((A + 1.0) + (A - 1.0) * c - sA),
-             (A + 1.0) - (A - 1.0) * c + sA, 2.0 * ((A - 1.0) - (A + 1.0) * c), (A + 1.0) - (A - 1.0) * c - sA);
-    }
-    void build()
-    {
-        ident (0); ident (1);
-        if (sm[2] >= 0.5)
+        const double pi = juce::MathConstants<double>::pi;
+        auto omega = [&] (double f) { return 2.0 * pi * juce::jmin (f, sr * 0.45) / sr; };
+        auto hp1 = [&] (int i, double f) { const double K = std::tan (pi * juce::jmin (f, sr * 0.45) / sr); set (cf, on, i, 1.0, -1.0, 0.0, 1.0 + K, K - 1.0, 0.0); };
+        auto hp2 = [&] (int i, double f, double Q) { const double w0 = omega (f), c = std::cos (w0), al = std::sin (w0) / (2.0 * Q); set (cf, on, i, (1.0 + c) / 2.0, -(1.0 + c), (1.0 + c) / 2.0, 1.0 + al, -2.0 * c, 1.0 - al); };
+        auto bell = [&] (int i, double f, double g, double Q)
         {
-            const int sl = (int) std::floor (sm[1] + 0.5);
-            if (sl == 0) hp1 (0, sm[0]);
-            else if (sl == 1) hp2 (0, sm[0], 0.70711);
-            else if (sl == 2) { hp1 (0, sm[0]); hp2 (1, sm[0], 1.0); }
-            else { hp2 (0, sm[0], 0.5412); hp2 (1, sm[0], 1.30656); }
+            const double w0 = omega (f), c = std::cos (w0), al = std::sin (w0) / (2.0 * Q), A = std::exp (std::log (10.0) * g / 40.0);
+            set (cf, on, i, 1.0 + al * A, -2.0 * c, 1.0 - al * A, 1.0 + al / A, -2.0 * c, 1.0 - al / A);
+        };
+        auto hshelf = [&] (int i, double f, double g)
+        {
+            const double w0 = omega (f), c = std::cos (w0), al = std::sin (w0) / 1.41421, A = std::exp (std::log (10.0) * g / 40.0), sA = 2.0 * std::sqrt (A) * al;
+            set (cf, on, i, A * ((A + 1.0) + (A - 1.0) * c + sA), -2.0 * A * ((A - 1.0) + (A + 1.0) * c), A * ((A + 1.0) + (A - 1.0) * c - sA),
+                 (A + 1.0) - (A - 1.0) * c + sA, 2.0 * ((A - 1.0) - (A + 1.0) * c), (A + 1.0) - (A - 1.0) * c - sA);
+        };
+        ident (cf, on, 0); ident (cf, on, 1);
+        if (v[2] >= 0.5)
+        {
+            const int sl = (int) std::floor (v[1] + 0.5);
+            if (sl == 0) hp1 (0, v[0]);
+            else if (sl == 1) hp2 (0, v[0], 0.70711);
+            else if (sl == 2) { hp1 (0, v[0]); hp2 (1, v[0], 1.0); }
+            else { hp2 (0, v[0], 0.5412); hp2 (1, v[0], 1.30656); }
         }
         for (int k = 0; k < 3; ++k)
         {
-            const double ge = sm[4 + 4 * k] * sm[6 + 4 * k];
-            if (std::abs (ge) > 0.01) bell (2 + k, sm[3 + 4 * k], ge, sm[5 + 4 * k]); else ident (2 + k);
+            const double ge = v[4 + 4 * k] * v[6 + 4 * k];
+            if (std::abs (ge) > 0.01) bell (2 + k, v[3 + 4 * k], ge, v[5 + 4 * k]); else ident (cf, on, 2 + k);
         }
-        const double ge = sm[16] * sm[17];
-        if (std::abs (ge) > 0.01) hshelf (5, sm[15], ge); else ident (5);
+        const double ge = v[16] * v[17];
+        if (std::abs (ge) > 0.01) hshelf (5, v[15], ge); else ident (cf, on, 5);
     }
+    void build() { design (sm, sampleRate, cf, active); }
     void designFir()
     {
         fir.design ([this] (int k)
