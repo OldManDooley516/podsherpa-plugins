@@ -63,6 +63,12 @@ int main (int argc, char** argv)
         if (const int lp = proc.getModule().getSoloParam(); lp >= 0)
             proc.getModuleParams()[(size_t) lp]->setRealNotifyingHost ((float) li.getIntValue());
 
+    // PS_SHOT_DELTA=1 turns on Delta (Contour, Traverse), to see its amber warning.
+    if (juce::SystemStats::getEnvironmentVariable ("PS_SHOT_DELTA", {}).isNotEmpty())
+        for (size_t i = 0; i < proc.getModule().getParamSpecs().size(); ++i)
+            if (proc.getModule().getParamSpecs()[i].id == "delta")
+                proc.getModuleParams()[i]->setRealNotifyingHost (1.0f);
+
     // Push a little audio through so the meters are not sitting at the floor in the shot.
     {
         juce::AudioBuffer<float> b { 2, 512 };
@@ -85,6 +91,11 @@ int main (int argc, char** argv)
     if (auto* se = dynamic_cast<SinglePluginEditor*> (ed.get()))
         se->setLookForShot (look, mode);
 
+    // PS_SHOT_PIPSTEP=<n> (with PS_SHOT_PRESET) shows step n of that preset's Pip walkthrough.
+    if (const auto ps = juce::SystemStats::getEnvironmentVariable ("PS_SHOT_PIPSTEP", {}); ps.isNotEmpty())
+        if (auto* se = dynamic_cast<SinglePluginEditor*> (ed.get()))
+            se->pipStepForShot (ps.getIntValue());
+
     const int w = argc > 5 ? juce::String (argv[5]).getIntValue() : ed->getWidth();
     const int h = argc > 6 ? juce::String (argv[6]).getIntValue() : ed->getHeight();
     ed->setSize (w, h);
@@ -105,16 +116,31 @@ int main (int argc, char** argv)
                 g += a / (1.0 + std::pow ((hz - f) / bw, 2.0));
             return 0.15 + g;
         };
-        for (int tick = 0; tick < 12; ++tick)
+        // PS_SHOT_SECONDS=<n> runs that much audio instead of half a second, with the voice
+        // speaking in syllables and phrases at uneven levels, so a history display fills up.
+        const double secs = juce::SystemStats::getEnvironmentVariable ("PS_SHOT_SECONDS", "0").getDoubleValue();
+        const int ticks = secs > 0.0 ? (int) (secs * 48000.0 / 2048.0) : 12;
+        // PS_SHOT_GAIN=<dB> scales the test voice (default 0: peaks around -10 dBFS RMS).
+        const double voiceGain = juce::Decibels::decibelsToGain (juce::SystemStats::getEnvironmentVariable ("PS_SHOT_GAIN", "0").getDoubleValue());
+        long n = 0;
+        for (int tick = 0; tick < ticks; ++tick)
         {
             for (int blk = 0; blk < 4; ++blk)
             {
-                for (int i = 0; i < 512; ++i)
+                for (int i = 0; i < 512; ++i, ++n)
                 {
+                    double env = 1.0;
+                    if (secs > 0.0)
+                    {   // 4 syllables a second, phrases of 2.5 s with a 0.5 s pause, louder and quieter phrases
+                        const double t = (double) n / 48000.0, inPhrase = std::fmod (t, 3.0);
+                        const double phraseDb = std::array<double, 4> { 0.0, -9.0, 4.0, -4.0 }[(size_t) ((int) (t / 3.0) % 4)];
+                        const double syl = 0.55 + 0.45 * std::sin (t * 2.0 * juce::MathConstants<double>::pi * 4.0);
+                        env = inPhrase < 2.5 ? syl * juce::Decibels::decibelsToGain (phraseDb) : 0.0;
+                    }
                     double v = 0.0;
                     for (int k = 1; k <= 120; ++k) v += std::sin (ph * k) * formant (130.0 * k) / k;
                     ph += pi2 * 130.0 / 48000.0; hum += pi2 * 50.0 / 48000.0;
-                    v = 0.12 * v + 0.03 * std::sin (hum) + 0.002 * (rnd.nextFloat() * 2.0f - 1.0f);
+                    v = voiceGain * (0.12 * env * v + 0.03 * std::sin (hum) + 0.002 * (rnd.nextFloat() * 2.0f - 1.0f));
                     for (int c = 0; c < 2; ++c) b.setSample (c, i, (float) v);
                 }
                 juce::MidiBuffer m;
@@ -153,6 +179,35 @@ int main (int argc, char** argv)
                 std::printf ("dragged %s: %s", hd.name.toRawUTF8(), sp[(size_t) hd.freq].text (proc.getModule().getParam (hd.freq)).toRawUTF8());
                 if (hd.gain >= 0) std::printf (", %s", sp[(size_t) hd.gain].text (proc.getModule().getParam (hd.gain)).toRawUTF8());
                 std::printf ("\n");
+            }
+
+    // PS_SHOT_CURVEDRAG=<dx>,<dy>[,shift] drags a transfer curve's threshold dot, then leaves
+    // the mouse over it so the hover readout shows.
+    if (const auto drag = juce::SystemStats::getEnvironmentVariable ("PS_SHOT_CURVEDRAG", {}); drag.isNotEmpty())
+        if (auto* se = dynamic_cast<SinglePluginEditor*> (ed.get()))
+            if (auto* tc = se->curveForShot())
+            {
+                const auto parts = juce::StringArray::fromTokens (drag, ",", {});
+                const float dx = parts[0].getFloatValue(), dy = parts[1].getFloatValue();
+                const auto mods = parts.size() > 2 ? juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::shiftModifier)
+                                                   : juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier);
+                auto src = juce::Desktop::getInstance().getMainMouseSource();
+                const auto t0 = juce::Time::getCurrentTime();
+                const auto start = tc->dotPositionForShot();
+                auto ev = [&] (juce::Point<float> p, juce::ModifierKeys m)
+                {
+                    return juce::MouseEvent (src, p, m, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, tc, tc, t0, start, t0, 1, false);
+                };
+                tc->mouseDown (ev (start, mods));
+                for (int k = 1; k <= 10; ++k) tc->mouseDrag (ev (start + juce::Point<float> (dx, dy) * ((float) k / 10.0f), mods));
+                tc->mouseUp (ev (start + juce::Point<float> (dx, dy), juce::ModifierKeys()));
+                tc->mouseMove (ev (tc->dotPositionForShot(), juce::ModifierKeys()));
+                juce::MidiBuffer m; juce::AudioBuffer<float> b { 2, 512 }; b.clear();
+                proc.processBlock (b, m);
+                const auto& sp = proc.getModule().getParamSpecs();
+                const int ti = proc.getModule().getCurveThresholdParam(), ri = proc.getModule().getCurveRatioParam();
+                std::printf ("dragged curve: threshold %s, ratio %s\n", sp[(size_t) ti].text (proc.getModule().getParam (ti)).toRawUTF8(),
+                             sp[(size_t) ri].text (proc.getModule().getParam (ri)).toRawUTF8());
             }
 
     juce::Image img { juce::Image::ARGB, w, h, true };

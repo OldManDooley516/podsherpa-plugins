@@ -81,6 +81,15 @@ static void dump (const juce::File& dir)
         runBlocks (b, block, [&] (auto& v) { if ((pos += block) == 24064) c.setParam (Contour::pB3Gain, 4.0f); c.process (v); });
         writeRaw (dir.getChildFile ("contour_p" + juce::String (pre) + "_l" + juce::String (lin) + ".f32"), b);
     }
+    // Traverse: every factory preset, with Threshold moved mid-file. Proves the Nov 21 interface
+    // work (level readout, Delta) leaves the audio bit-identical with Delta off.
+    for (int pre = 0; pre < (int) Traverse::factoryPresets().size(); ++pre)
+    {
+        Traverse t; t.applyFactoryPreset (pre);
+        t.prepare (sr, block, 2); auto b = in; int pos = 0;
+        runBlocks (b, block, [&] (auto& v) { if ((pos += block) == 24064) t.setParam (Traverse::pThreshold, -36.0f); t.process (v); });
+        writeRaw (dir.getChildFile ("traverse_p" + juce::String (pre) + ".f32"), b);
+    }
 }
 static void snapshot (juce::AudioProcessor& p, const juce::File& f)
 {
@@ -709,6 +718,160 @@ int main (int argc, char** argv)
 
         Contour c;
         check (c.getParamSpecs()[(size_t) Contour::pSolo].transient && c.getParamSpecs()[(size_t) Contour::pDelta].transient, "Solo and Delta are always off when a project opens");
+    }
+
+    std::cout << "Traverse level readout, curve dot and Delta" << std::endl;
+    {
+        // The detector level the editor shows: a sine's RMS is 3 dB under its peak.
+        {
+            Traverse t; t.prepare (sr, block, 2);
+            auto b = sine (sr, 24000, 1000.0, juce::Decibels::decibelsToGain (-10.0f));
+            float inDb = 0.0f, outDb = 0.0f;
+            int pos = 0;   // read once the compressor has settled; the editor reads every 33 ms
+            runBlocks (b, block, [&] (auto& v) { if ((pos += block) == 12032) t.readCurveLevels (inDb, outDb); t.process (v); });
+            const bool got = t.readCurveLevels (inDb, outDb);
+            check (got && std::abs (inDb - -13.0f) < 0.3f, "level readout: a -10 dBFS sine reads " + juce::String (inDb, 2) + " dB RMS (expected -13)");
+            // Threshold -18, ratio 2, knee 6: 5 dB over, so about 2.5 dB off the output.
+            check (std::abs ((inDb - outDb) - 2.5f) < 0.4f, "output readout sits " + juce::String (inDb - outDb, 2) + " dB under the input (curve says 2.5)");
+            t.readCurveLevels (inDb, outDb);
+            check (inDb < -100.0f, "reading the levels clears them");
+        }
+        check (Traverse().getCurveThresholdParam() == Traverse::pThreshold && Traverse().getCurveRatioParam() == Traverse::pRatio,
+               "the curve's dot moves Threshold and Ratio");
+
+        // Delta: the input minus the squeezed signal (before Makeup). So the compressor's own
+        // output with Makeup at 0 plus Delta gives back the input, and with nothing over the
+        // threshold Delta is silent.
+        auto voice = [&] (float gain)
+        {
+            juce::AudioBuffer<float> b (2, 48000); juce::Random r (5);
+            for (int i = 0; i < 48000; ++i)
+            {
+                const float env = ((i / 6000) % 2 == 0) ? 1.0f : 0.15f;
+                for (int ch = 0; ch < 2; ++ch) b.setSample (ch, i, gain * env * (0.5f * (float) std::sin (0.05 * i + ch) + 0.2f * (r.nextFloat() - 0.5f)));
+            }
+            return b;
+        };
+        auto runT = [&] (juce::AudioBuffer<float> b, bool delta, float makeup, float mix)
+        {
+            Traverse t; t.applyFactoryPreset (2);   // Radio Voice
+            t.setParam (Traverse::pMakeup, makeup); t.setParam (Traverse::pMix, mix);
+            t.setParam (Traverse::pDelta, delta ? 1.0f : 0.0f);
+            t.prepare (sr, block, 2);
+            runBlocks (b, block, [&] (auto& v) { t.process (v); });
+            return b;
+        };
+        for (float mix : { 100.0f, 50.0f })
+        {
+            const auto in = voice (1.0f), comp = runT (in, false, 0.0f, mix), del = runT (in, true, 0.0f, mix);
+            float worst = 0.0f, delPeak = 0.0f;
+            for (int i = 2000; i < 48000; ++i)
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    worst = juce::jmax (worst, std::abs (comp.getSample (ch, i) + del.getSample (ch, i) - in.getSample (ch, i)));
+                    delPeak = juce::jmax (delPeak, std::abs (del.getSample (ch, i)));
+                }
+            check (worst < 1.0e-6f && delPeak > 0.05f, "Mix " + juce::String ((int) mix) + "%: compressed plus Delta gives back the input (worst "
+                   + juce::String (worst, 9) + "), and Delta is not empty");
+        }
+        {
+            // Makeup does not leak into Delta: same Delta at +6 dB Makeup as at 0.
+            const auto in = voice (1.0f), a = runT (in, true, 0.0f, 100.0f), b2 = runT (in, true, 6.0f, 100.0f);
+            float worst = 0.0f;
+            for (int i = 2000; i < 48000; ++i) worst = juce::jmax (worst, std::abs (a.getSample (0, i) - b2.getSample (0, i)));
+            check (worst < 1.0e-6f, "Delta ignores Makeup: it is what the squeeze takes off, not the level boost");
+        }
+        {
+            const auto quiet = runT (voice (0.005f), true, 0.0f, 100.0f);
+            check (quiet.getMagnitude (2000, 46000) < 1.0e-6f, "with the voice under the threshold, Delta is silent");
+        }
+        {
+            // Switching Delta on and off mid-take fades, and afterwards the output is exactly normal.
+            Traverse t; t.applyFactoryPreset (2); t.prepare (sr, block, 2);
+            Traverse ref; ref.applyFactoryPreset (2); ref.prepare (sr, block, 2);
+            auto b = sine (sr, 48000, 200.0, 0.5f), u = b; int pos = 0;
+            float jump = 0.0f, prev = 0.0f;
+            runBlocks (b, block, [&] (auto& v)
+            {
+                pos += block;
+                if (pos == 12032) t.setParam (Traverse::pDelta, 1.0f);
+                if (pos == 24064) t.setParam (Traverse::pDelta, 0.0f);
+                t.process (v);
+                for (int i = 0; i < v.getNumSamples(); ++i) { const float x = v.getSample (0, i); if (pos > 4000) jump = juce::jmax (jump, std::abs (x - prev)); prev = x; }
+            });
+            runBlocks (u, block, [&] (auto& v) { ref.process (v); });
+            float after = 0.0f;
+            for (int i = 26000; i < 48000; ++i) after = juce::jmax (after, std::abs (b.getSample (0, i) - u.getSample (0, i)));
+            check (jump < 0.03f, "switching Delta on and off steps no more than the tone does (" + juce::String (jump, 4) + ")");
+            check (after == 0.0f, "once Delta is off the output is exactly the compressor's again");
+        }
+        Traverse t;
+        check (t.getParamSpecs()[(size_t) Traverse::pDelta].transient, "Delta is always off when a project opens");
+        t.setParam (Traverse::pDelta, 1.0f);
+        check (t.getAuditionWarning().startsWith ("Delta"), "with Delta on, the amber warning says so");
+    }
+
+    std::cout << "Traverse sidechain and Music Ducker" << std::endl;
+    {
+        // The real plugin, as a host drives it: one buffer with the music on channels 1-2 and
+        // the voice on 3-4 (the sidechain bus), as REAPER does after a send to 3/4.
+        SinglePluginProcessor proc (std::make_unique<Traverse>());
+        check (proc.getBusCount (true) == 2 && proc.getBus (true, 1)->getName() == "Sidechain",
+               "Traverse offers a second input called Sidechain");
+        {
+            auto lay = proc.getBusesLayout();
+            lay.inputBuses.getReference (1) = juce::AudioChannelSet::disabled();
+            const bool off = proc.checkBusesLayoutSupported (lay);
+            lay.inputBuses.getReference (1) = juce::AudioChannelSet::mono();
+            check (off && proc.checkBusesLayoutSupported (lay), "the sidechain may be switched off or mono");
+        }
+        proc.setCurrentProgram (Traverse::musicDucker);
+        check (proc.getProgramName (Traverse::musicDucker) == "Music Ducker" && proc.getModule().isKeyedFromSidechain(),
+               "the Music Ducker preset keys Traverse from the sidechain");
+        proc.prepareToPlay (sr, block);
+
+        // Music: a steady 300 Hz tone at -20 dBFS. Voice: a 150 Hz tone at -17 dBFS peak (about
+        // -20 dB RMS), talking for one second, silent for one, talking again.
+        const int n = (int) sr * 3;
+        juce::AudioBuffer<float> b (4, n);
+        const float music = juce::Decibels::decibelsToGain (-20.0f), voice = juce::Decibels::decibelsToGain (-17.0f);
+        for (int i = 0; i < n; ++i)
+        {
+            const bool talking = i < (int) sr || i >= 2 * (int) sr;
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                b.setSample (ch, i, music * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 300.0 * i / sr));
+                b.setSample (ch + 2, i, talking ? voice * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 150.0 * i / sr) : 0.0f);
+            }
+        }
+        juce::MidiBuffer mb;
+        runBlocks (b, block, [&] (auto& v) { proc.processBlock (v, mb); });
+        auto db = [&] (int from, int len) { return gainToDb (b.getMagnitude (0, from, len) / music); };
+        const float during = db ((int) (0.5 * sr), (int) (0.4 * sr)), gap = db ((int) (1.8 * sr), (int) (0.15 * sr));
+        check (during < -15.0f && during > -20.0f, "while the voice talks the music sits " + juce::String (-during, 1) + " dB lower (15 to 20 wanted)");
+        check (gap > -2.5f, "about a second into the pause the music is nearly back (" + juce::String (gap, 2) + " dB)");
+
+        // Nothing routed to the sidechain: Music Ducker leaves the music alone.
+        SinglePluginProcessor quiet (std::make_unique<Traverse>());
+        quiet.setCurrentProgram (Traverse::musicDucker); quiet.prepareToPlay (sr, block);
+        juce::AudioBuffer<float> q (4, (int) sr);
+        for (int i = 0; i < q.getNumSamples(); ++i) for (int ch = 0; ch < 4; ++ch) q.setSample (ch, i, ch < 2 ? music * (float) std::sin (0.04 * i) : 0.0f);
+        const auto qin = q;
+        runBlocks (q, block, [&] (auto& v) { quiet.processBlock (v, mb); });
+        float diff = 0.0f;
+        for (int i = 0; i < q.getNumSamples(); ++i) diff = juce::jmax (diff, std::abs (q.getSample (0, i) - qin.getSample (0, i)));
+        check (diff < 1.0e-6f, "with nothing on the sidechain, Music Ducker leaves the music untouched");
+
+        // Leaving Music Ducker for any other preset puts Traverse back on its own input.
+        proc.setCurrentProgram (0);
+        check (! proc.getModule().isKeyedFromSidechain(), "picking Default after Music Ducker switches Key back to Own input");
+
+        // Pip's walkthrough is there for Music Ducker only, and each step fits his three lines.
+        Traverse t;
+        bool shortSteps = true;
+        for (const auto& step : t.getPipTutorial (Traverse::musicDucker)) shortSteps &= step.length() <= 230;
+        check (t.getPipTutorial (Traverse::musicDucker).size() == 6 && t.getPipTutorial (0).isEmpty() && shortSteps,
+               "Pip has a six-step walkthrough for Music Ducker, none for the others, every step short");
     }
 
     std::cout << "Spectrum display" << std::endl;
