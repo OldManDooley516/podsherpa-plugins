@@ -57,6 +57,11 @@ public:
     virtual bool hasFrequencyResponse() const { return false; }
     virtual float responseDbAt (float) const { return 0.0f; }
 
+    /** A module that wants a spectrum display behind its curve. The slot then keeps the latest
+        8192 samples going in and coming out (SpectrumTap) and the editor draws both. Only the
+        copy happens on the audio thread; the FFT runs in the editor. */
+    virtual bool hasSpectrum() const { return false; }
+
     virtual bool hasTransferCurve() const { return false; }
     virtual float curveOutputDb (float inputDb) const { return inputDb; }
     virtual float getCurveThresholdDb() const { return -60.0f; }

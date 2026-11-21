@@ -3,6 +3,7 @@
 #include "SuiteSettings.h"
 #include "Meters.h"
 #include "Module.h"
+#include "Spectrum.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 
 namespace ps
@@ -25,7 +26,7 @@ inline juce::Colour faceTextDim (const Theme& t)  { return t.silverButtons ? t.b
     Colour is never the only signal in this suite, so each segment carries its word as well as
     its fill, and the selected one is also raised. That is what lets the Look pill work in
     Graphite, where the three accents are close in value. */
-class Segmented : public juce::Component
+class Segmented : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     std::function<void (int)> onChange;
@@ -487,18 +488,73 @@ private:
     and minus 18 dB, with the shaded area showing departure from flat.
 
     Like the transfer curve this is generic - it asks the module for a level in dB at a
-    frequency - so Contour Dynamic and Dropoff can offer one by implementing two methods. */
+    frequency - so Contour Dynamic and Dropoff can offer one by implementing two methods.
+
+    Behind the curve, for a module that asks for one, sits the spectrum of what goes in and what
+    comes out, as the JSFX draws it: input as a dim fill, output as a brighter fill with an
+    edge. The spectrum has its own scale (0 dBFS at the top, -90 at the bottom) because the EQ's
+    plus and minus 18 dB would put a voice off the bottom of the graph. The switch at the top
+    right picks Off, Out only, or In + Out, and the legend beside it names both colours. */
 class ResponseCurve : public juce::Component
 {
 public:
-    ResponseCurve (const Theme& t, const Module& m) : theme (t), module (m) {}
+    std::function<void (int)> onViewChange;
+
+    ResponseCurve (const Theme& t, const Module& m) : theme (t), module (m), viewSwitch (t, { "Off", "Out", "In + Out" })
+    {
+        if (module.hasSpectrum())
+        {
+            viewSwitch.onChange = [this] (int i) { view = i; if (onViewChange) onViewChange (i); repaint(); };
+            viewSwitch.setTooltip ("Shows the sound behind the curve: what comes out, or what goes in and what comes out.");
+            addAndMakeVisible (viewSwitch);
+        }
+    }
+
+    /** The editor hands over the two band arrays it updates on its timer. */
+    void setSpectrum (const std::array<float, SpectrumAnalyser::numBands>* in,
+                      const std::array<float, SpectrumAnalyser::numBands>* out)
+    {
+        specIn = in; specOut = out;
+    }
+    void setView (int v) { view = juce::jlimit (0, 2, v); viewSwitch.setIndex (view); repaint(); }
+    int getView() const { return view; }
+
+    static constexpr int headerH = 30;
+
+    void resized() override
+    {
+        if (module.hasSpectrum())
+        {
+            const int w = juce::jmax (210, viewSwitch.idealWidth());
+            viewSwitch.setBounds (getWidth() - w - 2, 0, w, headerH - 4);
+        }
+    }
 
     void paint (juce::Graphics& g) override
     {
         auto outer = getLocalBounds();
+        auto head = outer.removeFromTop (headerH);
         g.setColour (theme.dim);
         g.setFont (type::font (type::support));
-        g.drawText ("Response", outer.removeFromTop (20), juce::Justification::centredLeft);
+        g.drawText ("Response", head.withTrimmedBottom (4), juce::Justification::centredLeft);
+
+        // Legend: the colours never stand alone, each has its word beside it.
+        if (module.hasSpectrum() && view > 0)
+        {
+            auto leg = head.withTrimmedBottom (4).withTrimmedRight (viewSwitch.getWidth() + 16);
+            auto item = [&] (const juce::String& word, juce::Colour c)
+            {
+                const int tw = juce::GlyphArrangement::getStringWidthInt (type::font (type::support), word);
+                auto r = leg.removeFromRight (tw + 22);
+                g.setColour (c);
+                g.fillRoundedRectangle (r.removeFromLeft (14).withSizeKeepingCentre (14, 8).toFloat(), 2.0f);
+                g.setColour (theme.dim);
+                g.drawText (word, r.withTrimmedLeft (5), juce::Justification::centredLeft);
+                leg.removeFromRight (10);
+            };
+            item ("Out", outColour());
+            if (view == 2) item ("In", inColour());
+        }
 
         auto plot = outer.reduced (2);
         g.setColour (theme.bg);
@@ -514,6 +570,15 @@ public:
             return (float) (plot.getCentreY() - plot.getHeight() * juce::jlimit (-18.0, 18.0, db) / 36.0);
         };
 
+        // The spectrum first, so the grid and the curve sit on top of it.
+        if (module.hasSpectrum() && view > 0)
+        {
+            juce::Graphics::ScopedSaveState clip (g);
+            g.reduceClipRegion (plot);
+            if (view == 2 && specIn != nullptr) drawSpectrum (g, *specIn, plot, inColour(), false);
+            if (specOut != nullptr) drawSpectrum (g, *specOut, plot, outColour(), true);
+        }
+
         // Decade lines, and the 6 dB grid.
         g.setColour (theme.line.withAlpha (0.5f));
         for (double hz : { 100.0, 1000.0, 10000.0 })
@@ -523,12 +588,16 @@ public:
         g.setColour (theme.line);
         g.drawHorizontalLine ((int) yOf (0.0), (float) plot.getX(), (float) plot.getRight());
 
-        g.setColour (theme.dim.withAlpha (0.7f));
-        g.setFont (type::font (11.0f));
+        g.setColour (theme.dim.withAlpha (0.8f));
+        g.setFont (type::font (12.0f));
         for (auto [hz, label] : { std::pair<double, const char*> { 100.0, "100" },
                                   { 1000.0, "1k" }, { 10000.0, "10k" } })
             g.drawText (label, juce::Rectangle<int> (40, 14).withCentre ({ (int) xOf (hz), plot.getBottom() - 9 }),
                         juce::Justification::centred);
+        // The EQ's dB scale, down the left edge, so a boost can be read off the graph.
+        for (double db : { 12.0, 6.0, 0.0, -6.0, -12.0 })
+            g.drawText ((db > 0 ? "+" : "") + juce::String ((int) db),
+                        juce::Rectangle<int> (plot.getX() + 5, (int) yOf (db) - 8, 30, 16), juce::Justification::centredLeft);
 
         const int N = juce::jmax (2, plot.getWidth());
         juce::Path curve, fill;
@@ -552,9 +621,55 @@ public:
         g.drawRoundedRectangle (plot.toFloat().reduced (0.5f), 4.0f, 1.0f);
     }
 
+    /** Spectrum scale: 0 dBFS at the top of the plot, specFloorDb at the bottom. */
+    static constexpr float specFloorDb = -90.0f;
+
 private:
+    // Input is a neutral grey-blue in every Look so it reads as "before"; output borrows the
+    // Look's second accent, kept distinct from the curve's own colour.
+    juce::Colour inColour() const  { return theme.dim; }
+    juce::Colour outColour() const { return theme.accent2; }
+
+    void drawSpectrum (juce::Graphics& g, const std::array<float, SpectrumAnalyser::numBands>& b,
+                       juce::Rectangle<int> plot, juce::Colour c, bool edge)
+    {
+        auto yOf = [&] (float db)
+        {
+            const float a = juce::jlimit (0.0f, 1.0f, (db - specFloorDb) / -specFloorDb);
+            return (float) plot.getBottom() - a * (float) plot.getHeight();
+        };
+        auto xOfBand = [&] (int k)
+        {
+            const double a = (k + 0.5) / SpectrumAnalyser::numBands;   // bands span 20 Hz..20 kHz
+            return (float) (plot.getX() + plot.getWidth() * a);
+        };
+        juce::Path line, area;
+        area.startNewSubPath ((float) plot.getX(), (float) plot.getBottom());
+        area.lineTo ((float) plot.getX(), yOf (b[0]));
+        for (int k = 0; k < SpectrumAnalyser::numBands; ++k)
+        {
+            const float x = xOfBand (k), y = yOf (b[(size_t) k]);
+            if (k == 0) line.startNewSubPath ((float) plot.getX(), y);
+            line.lineTo (x, y);
+            area.lineTo (x, y);
+        }
+        const float yEnd = yOf (b[SpectrumAnalyser::numBands - 1]);
+        line.lineTo ((float) plot.getRight(), yEnd);
+        area.lineTo ((float) plot.getRight(), yEnd);
+        area.lineTo ((float) plot.getRight(), (float) plot.getBottom());
+        area.closeSubPath();
+        g.setColour (c.withAlpha (edge ? 0.22f : 0.18f));
+        g.fillPath (area);
+        g.setColour (c.withAlpha (edge ? 0.75f : 0.45f));
+        g.strokePath (line, juce::PathStrokeType (edge ? 1.4f : 1.0f, juce::PathStrokeType::curved));
+    }
+
     const Theme& theme;
     const Module& module;
+    Segmented viewSwitch;
+    const std::array<float, SpectrumAnalyser::numBands>* specIn = nullptr;
+    const std::array<float, SpectrumAnalyser::numBands>* specOut = nullptr;
+    int view = 2;
 };
 
 //==============================================================================

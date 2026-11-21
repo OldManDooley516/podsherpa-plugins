@@ -26,9 +26,16 @@ public:
             p->bind (s, {}, s.def);
             params.push_back (p); addParameter (p);
         }
+        slot.tapSpectrum = true;
         slot.setModule (std::move (m));
     }
     Module& getModule() { return *module; }
+    ModuleSlot& getSlot() { return slot; }
+
+    /** What the spectrum display shows: 0 off, 1 output only, 2 input and output. Not a host
+        parameter (nothing to automate) but saved with the project, as the JSFX saves its
+        Spectrum switch. */
+    std::atomic<int> spectrumView { 2 };
     std::vector<HostParam*> getModuleParams() const { return params; }
 
     const juce::String getName() const override { return "PodSherpa " + module->getDisplayName(); }
@@ -100,6 +107,7 @@ public:
         t.setProperty ("bypass", bypass->get(), nullptr);
         t.setProperty ("inGain", inGain->get(), nullptr);
         t.setProperty ("outGain", outGain->get(), nullptr);
+        if (module->hasSpectrum()) t.setProperty ("spectrum", spectrumView.load(), nullptr);
         for (auto* p : params)
         {
             juce::ValueTree c ("PARAM");
@@ -120,6 +128,7 @@ public:
         *bypass = (bool) t.getProperty ("bypass", false);
         *inGain = (float) t.getProperty ("inGain", 0.0f);
         *outGain = (float) t.getProperty ("outGain", 0.0f);
+        spectrumView.store (juce::jlimit (0, 2, (int) t.getProperty ("spectrum", 2)));
         for (auto* p : params)
         {
             const auto s = p->getSpec();
@@ -244,6 +253,12 @@ public:
         if (p.getModule().hasFrequencyResponse())
         {
             response = std::make_unique<ResponseCurve> (theme, p.getModule());
+            if (p.getModule().hasSpectrum())
+            {
+                response->setSpectrum (&specIn.getBands(), &specOut.getBands());
+                response->setView (p.spectrumView.load());
+                response->onViewChange = [this] (int v) { proc.spectrumView.store (v); };
+            }
             addAndMakeVisible (*response);
         }
         if (p.getModule().hasTransferCurve())
@@ -268,7 +283,7 @@ public:
         addAndMakeVisible (tips);
 
         setSize (1120, preferredHeight());
-        startTimerHz (30);
+        startTimerHz (timerRate);
     }
 
     ~SinglePluginEditor() override { setLookAndFeel (nullptr); }
@@ -435,7 +450,7 @@ public:
         // the JSFX lays it out: the shape is the thing you steer by, the numbers follow.
         if (response != nullptr)
         {
-            response->setBounds (inner.removeFromTop (juce::jmin (210, inner.getHeight() / 2)));
+            response->setBounds (inner.removeFromTop (juce::jmin (230, inner.getHeight() / 2)));
             inner.removeFromTop (10);
         }
 
@@ -444,6 +459,7 @@ public:
 
 private:
     static constexpr int headerH = 74;
+    static constexpr int timerRate = 30;
     static constexpr int numVintageAccents = 5;
 
     /** Tall enough for the controls at the current mode, plus the header, the footer, the
@@ -465,7 +481,7 @@ private:
             const int body = juce::jmax (300, panel.idealHeight());
             return chrome + pip + body + 136;
         }
-        if (response != nullptr) return chrome + pip + 220 + panel.idealHeight();
+        if (response != nullptr) return chrome + pip + 240 + panel.idealHeight();
         return juce::jmax (440, chrome + pip + panel.idealHeight());
     }
 
@@ -566,7 +582,18 @@ private:
         if (reduction != nullptr) reduction->push (moduleMeter);
         if (history != nullptr) history->push (moduleMeter);
         if (curve != nullptr) curve->repaint();   // the curve follows the controls as they move
-        if (response != nullptr) response->repaint();
+        if (response != nullptr)
+        {
+            if (proc.getModule().hasSpectrum())
+            {
+                auto& slot = proc.getSlot();
+                const int view = proc.spectrumView.load();
+                if (view != response->getView()) response->setView (view);   // a project was loaded
+                if (view == 2) specIn.update (slot.preTap, slot.getSampleRate(), timerRate);
+                if (view >= 1) specOut.update (slot.postTap, slot.getSampleRate(), timerRate);
+            }
+            response->repaint();
+        }
         repaint();
     }
 
@@ -585,6 +612,7 @@ private:
     juce::SliderParameterAttachment inAtt, outAtt;
     juce::TooltipWindow tips { this };
     std::unique_ptr<ResponseCurve> response;
+    SpectrumAnalyser specIn, specOut;
     std::unique_ptr<TransferCurve> curve;
     std::unique_ptr<ReductionHistory> history;
     std::unique_ptr<ReductionMeter> reduction;

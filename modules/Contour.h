@@ -10,7 +10,7 @@ namespace ps
 
     Difference from the JSFX: the Phase switch is read when playback is prepared, so changing it
     takes effect at the next start (the JSFX switches live). Not carried over yet: per-band
-    Listen, the analyzer, the graph and the factory presets as a menu. Input and output gain
+    Listen. Input and output gain
     and the bypass crossfade are handled by the shared core. */
 class Contour : public Module
 {
@@ -130,6 +130,7 @@ public:
     }
 
     bool hasFrequencyResponse() const override { return true; }
+    bool hasSpectrum() const override { return true; }
 
     /** |H(e^jw)| of every active stage, multiplied, in dB. Uses the live coefficients, so the
         curve follows the controls exactly rather than approximating them. */

@@ -574,6 +574,60 @@ int main (int argc, char** argv)
         check (worstText >= 4.5, "text stays readable on every Look's surfaces (worst " + juce::String (worstText, 1) + ":1)");
     }
 
+
+    std::cout << "Spectrum display" << std::endl;
+    {
+        auto bandOf = [] (double hz)
+        {
+            for (int k = 0; k < SpectrumAnalyser::numBands; ++k)
+                if (hz < SpectrumAnalyser::edgeHz (k + 1)) return k;
+            return SpectrumAnalyser::numBands - 1;
+        };
+        auto read = [&] (const juce::AudioBuffer<float>& b)
+        {
+            SpectrumTap tap; tap.push (b, b.getNumChannels());
+            SpectrumAnalyser a;
+            for (int i = 0; i < 7; ++i) a.update (tap, sr, 30.0);   // settles within the hold time
+            return a.getBands();
+        };
+
+        // Calibration: a full-scale sine reads about 0 dB in the band that holds it. A Hann
+        // window between FFT steps can read up to 1.4 dB low, so allow that.
+        const auto full = read (sine (sr, 8192, 1000.0, 1.0f));
+        const float at1k = full[(size_t) bandOf (1000.0)];
+        check (at1k > -1.6f && at1k < 0.2f, "a full-scale 1 kHz sine reads " + juce::String (at1k, 2) + " dB in its band");
+
+        // The Nov 15 bug: loud 200 Hz energy smeared into everything below 100 Hz at 2048
+        // points. At 8192 the bottom of the graph stays clear.
+        const auto loud200 = read (sine (sr, 8192, 200.0, 0.5f));
+        const float at40 = loud200[(size_t) bandOf (40.0)] - loud200[(size_t) bandOf (200.0)];
+        check (at40 < -60.0f, "a loud 200 Hz tone leaves 40 Hz " + juce::String (-at40, 1) + " dB below it");
+
+        // Through Contour's slot: a 40 Hz tone under an 80 Hz, 24 dB/oct high-pass shows the
+        // input at full height and the output pulled down, the way the high-pass sounds.
+        Contour c; c.setParam (Contour::pHpSlope, 3.0f);
+        ModuleSlot slot; slot.tapSpectrum = true; slot.prepare (sr, block, 2);
+        slot.setModule (std::make_unique<Contour> ());
+        slot.getModule()->setParam (Contour::pHpSlope, 3.0f);
+        auto tone = sine (sr, 48000, 40.0, 0.5f);
+        runBlocks (tone, block, [&] (auto& v) { slot.process (v, false); });
+        SpectrumAnalyser ai, ao;
+        for (int i = 0; i < 7; ++i) { ai.update (slot.preTap, sr, 30.0); ao.update (slot.postTap, sr, 30.0); }
+        const float drop = ao.getBands()[(size_t) bandOf (40.0)] - ai.getBands()[(size_t) bandOf (40.0)];
+        check (drop < -20.0f && drop > -30.0f, "40 Hz under the 80 Hz, 24 dB/oct high-pass shows " + juce::String (-drop, 1)
+               + " dB lower going out than coming in (curve says " + juce::String (-slot.getModule()->responseDbAt (40.0f), 1) + ")");
+
+        // Stopped transport: nothing new arrives and the display sinks rather than freezing.
+        for (int i = 0; i < 300; ++i) ao.update (slot.postTap, sr, 30.0);
+        check (ao.getBands()[(size_t) bandOf (1000.0)] <= SpectrumAnalyser::floorDb + 0.1f, "with playback stopped the display falls to the floor");
+
+        // Basecamp's slots do not tap (no spectrum drawn there yet), so they do no extra work.
+        ModuleSlot rack; rack.prepare (sr, block, 2); rack.setModule (std::make_unique<Contour> ());
+        auto t2 = sine (sr, 4096, 1000.0, 0.5f);
+        runBlocks (t2, block, [&] (auto& v) { rack.process (v, false); });
+        check (rack.postTap.samplesWritten() == 0, "a slot that is not asked to tap copies nothing");
+    }
+
     std::cout << (failures == 0 ? "ALL PASSED" : juce::String (failures) + " FAILED") << std::endl;
     return failures == 0 ? 0 : 1;
 }

@@ -13,6 +13,7 @@
 #include "../core/SinglePlugin.h"
 #include "../core/ModuleFactory.h"
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <tuple>
 
 using namespace ps;
 
@@ -81,9 +82,40 @@ int main (int argc, char** argv)
     const int h = argc > 6 ? juce::String (argv[6]).getIntValue() : ed->getHeight();
     ed->setSize (w, h);
 
-    // The editor's timer never fires here, so pull the meters forward by hand.
+    // The editor's timer never fires here, so pull the meters forward by hand, with audio
+    // between ticks as a host would have. A voice-like test signal: a 130 Hz buzz with three
+    // formants, a little hiss, and 50 Hz hum for a high-pass to visibly remove.
     if (auto* se = dynamic_cast<SinglePluginEditor*> (ed.get()))
-        for (int i = 0; i < 8; ++i) se->tickForShot();
+    {
+        juce::AudioBuffer<float> b { 2, 512 };
+        juce::Random rnd { 2 };
+        double ph = 0.0, hum = 0.0;
+        const double pi2 = 2.0 * juce::MathConstants<double>::pi;
+        auto formant = [] (double hz)
+        {
+            double g = 0.0;
+            for (auto [f, bw, a] : { std::tuple { 500.0, 120.0, 1.0 }, { 1500.0, 200.0, 0.5 }, { 2600.0, 300.0, 0.3 } })
+                g += a / (1.0 + std::pow ((hz - f) / bw, 2.0));
+            return 0.15 + g;
+        };
+        for (int tick = 0; tick < 12; ++tick)
+        {
+            for (int blk = 0; blk < 4; ++blk)
+            {
+                for (int i = 0; i < 512; ++i)
+                {
+                    double v = 0.0;
+                    for (int k = 1; k <= 120; ++k) v += std::sin (ph * k) * formant (130.0 * k) / k;
+                    ph += pi2 * 130.0 / 48000.0; hum += pi2 * 50.0 / 48000.0;
+                    v = 0.12 * v + 0.03 * std::sin (hum) + 0.002 * (rnd.nextFloat() * 2.0f - 1.0f);
+                    for (int c = 0; c < 2; ++c) b.setSample (c, i, (float) v);
+                }
+                juce::MidiBuffer m;
+                proc.processBlock (b, m);
+            }
+            se->tickForShot();
+        }
+    }
 
     juce::Image img { juce::Image::ARGB, w, h, true };
     {
