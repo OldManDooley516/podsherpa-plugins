@@ -5,7 +5,12 @@
 
 namespace ps
 {
-inline const char* suiteVersion() { return "0.1"; }
+/** The version in the chip, from CMakeLists.txt so the chip and what the host reports can
+    never disagree. */
+#ifndef PS_VERSION
+ #error "PS_VERSION comes from CMakeLists.txt"
+#endif
+inline const char* suiteVersion() { return PS_VERSION; }
 
 /** Wraps one module as its own VST3/AU plugin. Parameter IDs are "<module>.<param>". */
 class SinglePluginProcessor : public juce::AudioProcessor, private juce::AsyncUpdater

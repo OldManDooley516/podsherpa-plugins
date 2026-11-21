@@ -764,6 +764,8 @@ int main (int argc, char** argv)
         check (rack.postTap.samplesWritten() == 0, "a slot that is not asked to tap copies nothing");
     }
 
+    check (juce::String (suiteVersion()) == "0.5.1", "the suite version is 0.5.1 (Sean, Nov 21)");
+
     std::cout << (failures == 0 ? "ALL PASSED" : juce::String (failures) + " FAILED") << std::endl;
     return failures == 0 ? 0 : 1;
 }

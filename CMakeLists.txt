@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.22)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
-project(PodSherpaPlugins VERSION 0.1.0 LANGUAGES C CXX)
+# The suite's version, shown in every plugin's chip and reported to the host. Sean sets it:
+# VST3/AU builds started at 0.5.1 on Nov 21 (the JSFX line is the 0.4 series). Step only the
+# last number unless he says otherwise.
+project(PodSherpaPlugins VERSION 0.5.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,7 +22,7 @@ else()
     set(PS_FORMATS VST3)
 endif()
 
-set(PS_DEFS JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
+set(PS_DEFS PS_VERSION="${PROJECT_VERSION}" JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
 
 # The suite's three faces, compiled into every binary so nothing depends on what is installed on
 # the listener's machine. Both families are SIL OFL 1.1, which allows this; see assets/fonts.
