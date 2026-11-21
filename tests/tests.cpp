@@ -608,12 +608,12 @@ int main (int argc, char** argv)
     }
 
 
-    std::cout << "Contour Listen" << std::endl;
+    std::cout << "Contour Solo and Delta" << std::endl;
     {
         auto levelThrough = [&] (int listen, double hz, std::function<void (Contour&)> setup = {})
         {
             Contour c; c.prepare (sr, block, 2); if (setup) setup (c);
-            c.setParam (Contour::pListen, (float) listen);
+            c.setParam (Contour::pSolo, (float) listen);
             auto t = sine (sr, 24000, hz, 0.5f);
             runBlocks (t, block, [&] (auto& v) { c.process (v); });
             return gainToDb (t.getMagnitude (0, 12000, 12000) / 0.5f);
@@ -621,20 +621,20 @@ int main (int argc, char** argv)
         // Band 3 at 3.2 kHz, width 1, with its gain cut: Listen ignores the gain.
         auto cut3 = [] (Contour& c) { c.setParam (Contour::pB3Gain, -12.0f); };
         const float on = levelThrough (3, 3200.0, cut3), off = levelThrough (3, 200.0, cut3);
-        check (std::abs (on) < 0.2f && off < -20.0f, "Listen to Band 3: 3.2 kHz plays at " + juce::String (on, 2)
+        check (std::abs (on) < 0.2f && off < -20.0f, "Solo Band 3: 3.2 kHz plays at " + juce::String (on, 2)
                + " dB (its -12 dB cut ignored), 200 Hz at " + juce::String (off, 1) + " dB");
         auto hp = [] (Contour& c) { c.setParam (Contour::pHpSlope, 3.0f); };
         const float lo = levelThrough (1, 20.0, hp), hi = levelThrough (1, 1000.0, hp);
-        check (std::abs (lo) < 0.5f && hi < -40.0f, "Listen to the high-pass plays what it removes: 20 Hz at "
+        check (std::abs (lo) < 0.5f && hi < -40.0f, "Solo the high-pass plays what it removes: 20 Hz at "
                + juce::String (lo, 2) + " dB, 1 kHz at " + juce::String (hi, 1) + " dB");
         const float air = levelThrough (5, 16000.0), body = levelThrough (5, 1000.0);
-        check (air > -1.0f && body < -30.0f, "Listen to the shelf: 16 kHz at " + juce::String (air, 2) + " dB, 1 kHz at " + juce::String (body, 1) + " dB");
+        check (air > -1.0f && body < -30.0f, "Solo the shelf: 16 kHz at " + juce::String (air, 2) + " dB, 1 kHz at " + juce::String (body, 1) + " dB");
 
         // Linear mode: what is heard is the same signal, delayed to match the EQ's latency.
         auto run = [&] (bool linear)
         {
             Contour c; c.setParam (Contour::pPhase, linear ? 1.0f : 0.0f); c.prepare (sr, block, 2);
-            c.setParam (Contour::pListen, 2.0f);
+            c.setParam (Contour::pSolo, 2.0f);
             juce::AudioBuffer<float> b (2, 24000); juce::Random r (7);
             for (int i = 0; i < 24000; ++i) for (int ch = 0; ch < 2; ++ch) b.setSample (ch, i, 0.3f * (r.nextFloat() - 0.5f));
             runBlocks (b, block, [&] (auto& v) { c.process (v); });
@@ -644,19 +644,19 @@ int main (int argc, char** argv)
         float worst = 0.0f;
         for (int i = 4000; i < 24000 - LinearPhase::latency; ++i)
             worst = juce::jmax (worst, std::abs (nat.getSample (0, i) - lin.getSample (0, i + LinearPhase::latency)));
-        check (worst < 1.0e-6f, "in Linear mode Listen is the same sound " + juce::String (LinearPhase::latency) + " samples later, lined up with the EQ");
+        check (worst < 1.0e-6f, "in Linear mode Solo is the same sound " + juce::String (LinearPhase::latency) + " samples later, lined up with the EQ");
 
         // Switching band, and switching off, never jumps.
         {
-            Contour c; c.prepare (sr, block, 2); c.setParam (Contour::pListen, 3.0f);
+            Contour c; c.prepare (sr, block, 2); c.setParam (Contour::pSolo, 3.0f);
             Contour ref; ref.prepare (sr, block, 2);
             auto t = sine (sr, 48000, 1000.0, 0.5f), u = t; int pos = 0;
             float jump = 0.0f, prev = 0.0f;
             runBlocks (t, block, [&] (auto& v)
             {
                 pos += block;
-                if (pos == 12032) c.setParam (Contour::pListen, 2.0f);
-                if (pos == 24064) c.setParam (Contour::pListen, 0.0f);
+                if (pos == 12032) c.setParam (Contour::pSolo, 2.0f);
+                if (pos == 24064) c.setParam (Contour::pSolo, 0.0f);
                 c.process (v);
                 for (int i = 0; i < v.getNumSamples(); ++i) { const float x = v.getSample (0, i); if (pos > 2000) jump = juce::jmax (jump, std::abs (x - prev)); prev = x; }
             });
@@ -664,10 +664,51 @@ int main (int argc, char** argv)
             float after = 0.0f;
             for (int i = 26000; i < 48000; ++i) after = juce::jmax (after, std::abs (t.getSample (0, i) - u.getSample (0, i)));
             check (jump < 0.075f, "switching Band 3 to Band 2 to off steps no more than the tone itself does (" + juce::String (jump, 3) + ", tone 0.065)");
-            check (after == 0.0f, "once Listen is off the output is exactly the EQ's again");
+            check (after == 0.0f, "once Solo is off the output is exactly the EQ's again");
         }
+        // Delta: output minus input. Input + delta must give back exactly what the EQ outputs,
+        // in both phase modes, and a flat EQ must have nothing to say.
+        auto noise = [&]
+        {
+            juce::AudioBuffer<float> b (2, 24000); juce::Random r (11);
+            for (int i = 0; i < 24000; ++i) for (int ch = 0; ch < 2; ++ch) b.setSample (ch, i, 0.3f * (r.nextFloat() - 0.5f));
+            return b;
+        };
+        for (int lin = 0; lin < 2; ++lin)
+        {
+            auto runWith = [&] (bool delta, bool flat)
+            {
+                Contour c; c.setParam (Contour::pPhase, (float) lin);
+                if (! flat) c.applyFactoryPreset (3);   // Remove Mud: -3 dB at 250 Hz, -1.5 dB at 400 Hz, high-pass 80 Hz
+                else c.setParam (Contour::pHpOn, 0.0f);
+                c.setParam (Contour::pDelta, delta ? 1.0f : 0.0f);
+                c.prepare (sr, block, 2);
+                auto b = noise();
+                runBlocks (b, block, [&] (auto& v) { c.process (v); });
+                return b;
+            };
+            const auto in = noise(), eq = runWith (false, false), delta = runWith (true, false), flat = runWith (true, true);
+            const int lat = lin ? LinearPhase::latency : 0;
+            float worst = 0.0f, flatPeak = 0.0f;
+            for (int i = 4000 + lat; i < 24000; ++i)
+            {
+                worst = juce::jmax (worst, std::abs (in.getSample (0, i - lat) + delta.getSample (0, i) - eq.getSample (0, i)));
+                flatPeak = juce::jmax (flatPeak, std::abs (flat.getSample (0, i)));
+            }
+            const juce::String m = lin ? "Linear" : "Natural";
+            check (worst < 1.0e-6f, m + ": input plus Delta equals the EQ's output (worst " + juce::String (worst, 9) + ")");
+            check (flatPeak < 1.0e-6f, m + ": with every band flat, Delta is silent");
+        }
+        {
+            Contour c; c.prepare (sr, block, 2); c.setParam (Contour::pDelta, 1.0f); c.setParam (Contour::pSolo, 3.0f);
+            auto t = sine (sr, 24000, 3200.0, 0.5f);
+            runBlocks (t, block, [&] (auto& v) { c.process (v); });
+            check (std::abs (gainToDb (t.getMagnitude (0, 12000, 12000) / 0.5f)) < 0.2f && c.getAuditionWarning().startsWith ("Soloing"),
+                   "with Solo and Delta both on, Solo wins (and the warning says so)");
+        }
+
         Contour c;
-        check (c.getParamSpecs()[(size_t) Contour::pListen].transient, "Listen is always off when a project opens");
+        check (c.getParamSpecs()[(size_t) Contour::pSolo].transient && c.getParamSpecs()[(size_t) Contour::pDelta].transient, "Solo and Delta are always off when a project opens");
     }
 
     std::cout << "Spectrum display" << std::endl;

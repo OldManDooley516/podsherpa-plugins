@@ -199,18 +199,19 @@ public:
         return headerH() + knobs * knobCell() + toggles * toggleCell() + 14;
     }
 
-    /** Under a band of columns, short switch-only rows (Phase, Listen) sit two to a line rather
-        than one each, outside Beginner, where each needs its sentence underneath. */
+    /** Under a band of columns, two or three short switch rows (Contour's Phase, Solo and
+        Delta) share one line rather than taking one each, outside Beginner, where each needs
+        its sentence underneath. */
     bool plainTwoUp() const
     {
-        if (groups.empty() || mode == Mode::Beginner || plain.size() < 2 || getWidth() > 0 && getWidth() < 700) return false;
-        for (auto* r : plain) if (r->spec.type != ParamSpec::Type::Choice) return false;
+        if (groups.empty() || mode == Mode::Beginner || plain.size() < 2 || plain.size() > 3 || (getWidth() > 0 && getWidth() < 700)) return false;
+        for (auto* r : plain) if (r->spec.type != ParamSpec::Type::Choice && r->spec.type != ParamSpec::Type::Bool) return false;
         return true;
     }
 
     int idealHeight() const
     {
-        const int plainRows = plainTwoUp() ? ((int) plain.size() + 1) / 2 : (int) plain.size();
+        const int plainRows = plainTwoUp() ? 1 : (int) plain.size();
         int h = plainRows * rowHeight() + 8;
         if (! groups.empty()) h += columnsHeight();
         return h;
@@ -276,12 +277,20 @@ public:
             juce::Rectangle<int> line;
             if (twoUp)
             {
-                if (pi % 2 == 0) pairLine = r.removeFromTop (rh).reduced (0, mode == Mode::Minimal ? 4 : 6);
-                line = pi % 2 == 0 ? pairLine.removeFromLeft (pairLine.getWidth() / 2 - 12) : pairLine.withTrimmedLeft (12);
-                const int nw = juce::jmin (120, line.getWidth() / 3);
+                const int n = (int) plain.size();
+                if (pi == 0) pairLine = r.removeFromTop (rh).reduced (0, mode == Mode::Minimal ? 4 : 6);
+                const int share = (pairLine.getWidth() + 24) / (n - (int) pi);
+                line = (pi + 1 == plain.size() ? pairLine : pairLine.removeFromLeft (share - 24));
+                if (pi + 1 < plain.size()) pairLine.removeFromLeft (24);
+                const int nw = juce::jmin (row->spec.type == ParamSpec::Type::Bool ? 70 : 90, line.getWidth() / 3);
                 row->label.setBounds (line.removeFromLeft (nw));
-                const int cw = juce::jmin (260, line.getWidth());
-                row->combo.setBounds (line.removeFromLeft (cw).withSizeKeepingCentre (cw, 34));
+                if (row->spec.type == ParamSpec::Type::Bool)
+                    row->toggle.setBounds (line.removeFromLeft (96).withSizeKeepingCentre (96, 32));
+                else
+                {
+                    const int cw = juce::jmin (260, line.getWidth());
+                    row->combo.setBounds (line.removeFromLeft (cw).withSizeKeepingCentre (cw, 34));
+                }
                 continue;
             }
             line = r.removeFromTop (rh).reduced (0, mode == Mode::Minimal ? 4 : 6);

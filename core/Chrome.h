@@ -536,18 +536,19 @@ public:
         auto outer = getLocalBounds();
         auto head = outer.removeFromTop (headerH);
         const int heard = listeningTo();
-        g.setFont (type::font (type::support, active >= 0 || heard >= 0));
-        g.setColour (active >= 0 ? theme.text : heard >= 0 ? theme.warn : theme.dim);
+        const auto warning = module.getAuditionWarning();
+        g.setFont (type::font (type::support, active >= 0 || warning.isNotEmpty()));
+        g.setColour (active >= 0 ? theme.text : warning.isNotEmpty() ? theme.warn : theme.dim);
         {
             // While a dot is hovered or held, its values; otherwise how to use the dots. The hint
             // stays on screen, as the standard asks, rather than living only in a tooltip.
             auto textArea = head.withTrimmedBottom (4).withTrimmedRight (module.hasSpectrum() ? viewSwitch.getWidth() + 130 : 0);
             juce::String line = "Response";
             if (active >= 0) line = readout (active);
-            else if (heard >= 0) line = "Listening to " + handles[(size_t) heard].name + " only";
+            else if (warning.isNotEmpty()) line = warning;
             else if (! handles.empty())
                 line = juce::String ("Drag dots to shape. Shift: fine. Scroll: width. ")
-                     + (juce::SystemStats::getOperatingSystemType() & juce::SystemStats::MacOSX ? "Option" : "Alt") + "-drag: hear the band.";
+                     + (juce::SystemStats::getOperatingSystemType() & juce::SystemStats::MacOSX ? "Option" : "Alt") + "-drag: solo the band.";
             g.drawFittedText (line, textArea, juce::Justification::centredLeft, 1, 0.9f);
         }
 
@@ -704,8 +705,8 @@ public:
         dragging = true;
         lastPos = e.position;
         if (e.mods.isAltDown())
-            if (auto* l = param (module.getListenParam()))
-            {   // hear only this band while it is held, so it can be swept to find a problem
+            if (auto* l = param (module.getSoloParam()))
+            {   // solo this band while it is held, so it can be swept to find a problem
                 listenBefore = l->getReal();
                 l->beginChangeGesture(); l->setRealNotifyingHost ((float) (h + 1));
                 heldListen = true;
@@ -743,8 +744,8 @@ public:
             for (int id : { hd.freq, hd.gain }) if (auto* p = param (id)) p->endChangeGesture();
         }
         if (heldListen)
-            if (auto* l = param (module.getListenParam()))
-            {   // put Listen back the way it was before the Alt-drag
+            if (auto* l = param (module.getSoloParam()))
+            {   // put Solo back the way it was before the Alt-drag
                 l->setRealNotifyingHost (listenBefore); l->endChangeGesture();
             }
         heldListen = false;
@@ -887,10 +888,10 @@ private:
     bool dragging = false, heldListen = false;
     float listenBefore = 0.0f;
 
-    /** The handle Listen is playing, or -1. */
+    /** The handle being soloed, or -1. */
     int listeningTo() const
     {
-        auto* l = param (module.getListenParam());
+        auto* l = param (module.getSoloParam());
         const int v = l != nullptr ? juce::roundToInt (l->getReal()) : 0;
         return v >= 1 && v <= (int) handles.size() ? v - 1 : -1;
     }

@@ -9,18 +9,22 @@ namespace ps
     block, and a linear-phase mode that applies the same curve with a 2048-sample delay.
 
     Difference from the JSFX: the Phase switch is read when playback is prepared, so changing it
-    takes effect at the next start (the JSFX switches live). Listen (Nov 21) plays only the
-    part of the input one band works on, as the JSFX does: a band-pass at a bell's frequency and
+    takes effect at the next start (the JSFX switches live). Solo (Nov 21, first called
+    Listen) plays only the part of the input one band works on, as the JSFX does: a band-pass at a bell's frequency and
     width, the low-pass twin of the high-pass (exactly what it removes, as Dropoff 0.4.1 does it),
     or a high-pass at the shelf's corner. Band gain is ignored, so a band can be listened to
-    before it is set. Switching crossfades through the EQ in 10 ms, and in Linear mode the
-    listened signal is delayed to match, so nothing jumps in time. Input and output gain
+    before it is set. Delta plays the difference, output minus input: exactly what the EQ adds
+    or takes away, so the EQ's output is always the input plus the delta. With a filter that
+    shifts phase that difference is not just "the removed band" (see status.md, item 6), but it
+    is the true change, which is what a delta is for. Solo wins over Delta when both are on.
+    Switching crossfades through the EQ in 10 ms, and in Linear mode the input is delayed by
+    the EQ's latency first, so both stay lined up in time. Input and output gain
     and the bypass crossfade are handled by the shared core. */
 class Contour : public Module
 {
 public:
     enum { pHpFreq, pHpSlope, pHpOn, pB2Freq, pB2Gain, pB2Q, pB2On, pB3Freq, pB3Gain, pB3Q, pB3On,
-           pB4Freq, pB4Gain, pB4Q, pB4On, pShelfFreq, pShelfGain, pShelfOn, pPhase, pListen };
+           pB4Freq, pB4Gain, pB4Q, pB4On, pShelfFreq, pShelfGain, pShelfOn, pPhase, pSolo, pDelta };
     Contour() : Module ({
         ParamSpec::number ("hp.freq", "High-pass", "Hz", 20.0f, 500.0f, 80.0f, true, 0).says ("Everything below this is rolled off. Rumble, footsteps and handling noise live down here."),
         ParamSpec::choice ("hp.slope", "High-pass slope", { "6 dB/oct", "12 dB/oct", "18 dB/oct", "24 dB/oct" }, 1).says ("How sharply the high-pass cuts. Steeper removes more but can thin a deep voice."),
@@ -41,8 +45,10 @@ public:
         ParamSpec::number ("shelf.gain", "High shelf gain", "dB", -18.0f, 18.0f, 0.0f).says ("Boost for air and openness, cut to take the top off a bright recording."),
         ParamSpec::toggle ("shelf.on", "High shelf on", true).says ("Turn the high shelf on or off."),
         ParamSpec::choice ("phase", "Phase", { "Natural (0 ms)", "Linear (43 ms)" }, 0).says ("Linear keeps the timing of the voice exact but adds delay. Natural adds no delay at all."),
-        ParamSpec::choice ("listen", "Listen", { "Off", "High-pass", "Band 2", "Band 3", "Band 4", "High shelf" }, 0).notSaved()
-            .says ("Play only the part of the voice one band works on, to find what to change. Always off when a project opens.") }) {}
+        ParamSpec::choice ("solo", "Solo", { "Off", "High-pass", "Band 2", "Band 3", "Band 4", "High shelf" }, 0).notSaved()
+            .says ("Play only the part of the voice one band works on, to find what to change. Always off when a project opens."),
+        ParamSpec::toggle ("delta", "Delta", false).notSaved()
+            .says ("Play only what the EQ is adding or taking away. Silent when every band is flat. Always off when a project opens.") }) {}
     juce::String getModuleId() const override { return "contour"; }
     juce::String getDisplayName() const override { return "Contour"; }
     juce::String getSubtitle() const override { return "Voice EQ"; }
@@ -69,8 +75,10 @@ public:
     void process (juce::AudioBuffer<float>& b) override
     {
         const int n = b.getNumSamples(), nc = juce::jmin (b.getNumChannels(), numChannels);
-        // Listen needs the input as it was; keep a copy only while Listen is on or fading.
-        const int wantListen = (int) std::floor (getParam (pListen) + 0.5f);
+        // Solo and Delta need the input as it was; keep a copy only while one is on or fading.
+        // What to audition: a band (1-5), the delta (6), or nothing. Solo wins over Delta.
+        const int solo = (int) std::floor (getParam (pSolo) + 0.5f);
+        const int wantListen = solo != 0 ? solo : (getParam (pDelta) >= 0.5f ? deltaMode : 0);
         const bool listening = wantListen != 0 || listenBand != 0;
         if (listening)
         {
@@ -164,7 +172,14 @@ public:
                  { "Band 4", "4", pB4Freq, pB4Gain, pB4Q, pB4On },
                  { "High shelf", "HS", pShelfFreq, pShelfGain, -1, pShelfOn } };
     }
-    int getListenParam() const override { return pListen; }
+    int getSoloParam() const override { return pSolo; }
+    juce::String getAuditionWarning() const override
+    {
+        const int solo = juce::roundToInt (getParam (pSolo));
+        if (solo > 0) return "Soloing " + getParamSpecs()[(size_t) pSolo].choices[solo] + ": you are hearing only that band";
+        if (getParam (pDelta) >= 0.5f) return "Delta: you are hearing only what the EQ changes";
+        return {};
+    }
 
     /** |H(e^jw)| of every active stage, multiplied, in dB. Built from the controls with the same
         filter design the audio path uses, so the curve is the real response, and it follows a
@@ -269,6 +284,7 @@ private:
         }
         else if (band >= 2 && band <= 4) bp (0, sm[3 + 4 * (band - 2)], sm[5 + 4 * (band - 2)]);
         else if (band == 5) hp2 (0, sm[15], 0.70711);
+        // deltaMode: no filter, the input as it was (delayed in Linear mode)
     }
 
     /** Replaces the EQ's output with the listened band. Changing band fades to the EQ and back
@@ -312,7 +328,8 @@ private:
                     const double out = d[listenPos]; d[listenPos] = (float) y; y = out;
                 }
                 const double eq = b.getSample (c, i);
-                b.setSample (c, i, (float) (eq + (y - eq) * listenGain));
+                const double heard = listenBand == deltaMode ? eq - y : y;   // delta: output minus the aligned input
+                b.setSample (c, i, (float) (eq + (heard - eq) * listenGain));
             }
             if (lat > 0 && ++listenPos >= lat) listenPos = 0;
         }
@@ -343,6 +360,7 @@ private:
     juce::AudioBuffer<float> dryBuf, listenDelay;
     std::array<Coef, 2> lc {}; std::array<bool, 2> lactive {};
     std::array<std::array<double, 4>, maxChannels> lz {};
+    static constexpr int deltaMode = 6;
     int listenBand = 0, listenPos = 0; double listenGain = 0.0;
 };
 } // namespace ps

@@ -58,9 +58,9 @@ int main (int argc, char** argv)
     // PS_SHOT_PRESET=<n> renders with factory preset n, to see a curve that is not flat.
     if (const auto pre = juce::SystemStats::getEnvironmentVariable ("PS_SHOT_PRESET", {}); pre.isNotEmpty())
         proc.setCurrentProgram (pre.getIntValue());
-    // PS_SHOT_LISTEN=<n> sets the module's Listen choice (Contour: 3 = Band 3).
-    if (const auto li = juce::SystemStats::getEnvironmentVariable ("PS_SHOT_LISTEN", {}); li.isNotEmpty())
-        if (const int lp = proc.getModule().getListenParam(); lp >= 0)
+    // PS_SHOT_SOLO=<n> sets the module's Solo choice (Contour: 3 = Band 3).
+    if (const auto li = juce::SystemStats::getEnvironmentVariable ("PS_SHOT_SOLO", {}); li.isNotEmpty())
+        if (const int lp = proc.getModule().getSoloParam(); lp >= 0)
             proc.getModuleParams()[(size_t) lp]->setRealNotifyingHost ((float) li.getIntValue());
 
     // Push a little audio through so the meters are not sitting at the floor in the shot.
