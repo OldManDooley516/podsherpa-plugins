@@ -87,6 +87,20 @@ public:
     virtual int getCurveThresholdParam() const { return -1; }
     virtual int getCurveRatioParam() const { return -1; }
 
+    /** Sidechain (Nov 21). A module that can react to another track says so, and the standalone
+        plugin then offers a second, optional stereo input. Before each block the wrapper points
+        the module at that input (or at nothing, when the host gives none or inside Basecamp,
+        which is single-track) and clears the pointer afterwards. Same length as the block. */
+    virtual bool wantsSidechain() const { return false; }
+    void setSidechain (const juce::AudioBuffer<float>* sc) { sidechain = sc; }
+    /** True while the module is reacting to the sidechain rather than its own input, so the
+        displays call the level they show "Sidechain" instead of "Voice". */
+    virtual bool isKeyedFromSidechain() const { return false; }
+
+    /** Pip's walkthrough for a factory preset: one short step per entry, shown one at a time in
+        Beginner mode when that preset is picked. Empty: no walkthrough, Pip's usual line. */
+    virtual juce::StringArray getPipTutorial (int /*presetIndex*/) const { return {}; }
+
     virtual juce::String getExtraReadout() const { return {}; }
     virtual bool extraReadoutIsGood() const { return true; }
 
@@ -126,6 +140,9 @@ public:
     int getNumParams() const { return (int) specs.size(); }
     void setParam (int i, float v) { values[(size_t) i].store (v, std::memory_order_relaxed); }
     float getParam (int i) const { return values[(size_t) i].load (std::memory_order_relaxed); }
+
+protected:
+    const juce::AudioBuffer<float>* sidechain = nullptr;
 
 private:
     std::vector<ParamSpec> specs;

@@ -811,6 +811,69 @@ int main (int argc, char** argv)
         check (t.getAuditionWarning().startsWith ("Delta"), "with Delta on, the amber warning says so");
     }
 
+    std::cout << "Traverse sidechain and Music Ducker" << std::endl;
+    {
+        // The real plugin, as a host drives it: one buffer with the music on channels 1-2 and
+        // the voice on 3-4 (the sidechain bus), as REAPER does after a send to 3/4.
+        SinglePluginProcessor proc (std::make_unique<Traverse>());
+        check (proc.getBusCount (true) == 2 && proc.getBus (true, 1)->getName() == "Sidechain",
+               "Traverse offers a second input called Sidechain");
+        {
+            auto lay = proc.getBusesLayout();
+            lay.inputBuses.getReference (1) = juce::AudioChannelSet::disabled();
+            const bool off = proc.checkBusesLayoutSupported (lay);
+            lay.inputBuses.getReference (1) = juce::AudioChannelSet::mono();
+            check (off && proc.checkBusesLayoutSupported (lay), "the sidechain may be switched off or mono");
+        }
+        proc.setCurrentProgram (Traverse::musicDucker);
+        check (proc.getProgramName (Traverse::musicDucker) == "Music Ducker" && proc.getModule().isKeyedFromSidechain(),
+               "the Music Ducker preset keys Traverse from the sidechain");
+        proc.prepareToPlay (sr, block);
+
+        // Music: a steady 300 Hz tone at -20 dBFS. Voice: a 150 Hz tone at -17 dBFS peak (about
+        // -20 dB RMS), talking for one second, silent for one, talking again.
+        const int n = (int) sr * 3;
+        juce::AudioBuffer<float> b (4, n);
+        const float music = juce::Decibels::decibelsToGain (-20.0f), voice = juce::Decibels::decibelsToGain (-17.0f);
+        for (int i = 0; i < n; ++i)
+        {
+            const bool talking = i < (int) sr || i >= 2 * (int) sr;
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                b.setSample (ch, i, music * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 300.0 * i / sr));
+                b.setSample (ch + 2, i, talking ? voice * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 150.0 * i / sr) : 0.0f);
+            }
+        }
+        juce::MidiBuffer mb;
+        runBlocks (b, block, [&] (auto& v) { proc.processBlock (v, mb); });
+        auto db = [&] (int from, int len) { return gainToDb (b.getMagnitude (0, from, len) / music); };
+        const float during = db ((int) (0.5 * sr), (int) (0.4 * sr)), gap = db ((int) (1.8 * sr), (int) (0.15 * sr));
+        check (during < -15.0f && during > -20.0f, "while the voice talks the music sits " + juce::String (-during, 1) + " dB lower (15 to 20 wanted)");
+        check (gap > -2.5f, "about a second into the pause the music is nearly back (" + juce::String (gap, 2) + " dB)");
+
+        // Nothing routed to the sidechain: Music Ducker leaves the music alone.
+        SinglePluginProcessor quiet (std::make_unique<Traverse>());
+        quiet.setCurrentProgram (Traverse::musicDucker); quiet.prepareToPlay (sr, block);
+        juce::AudioBuffer<float> q (4, (int) sr);
+        for (int i = 0; i < q.getNumSamples(); ++i) for (int ch = 0; ch < 4; ++ch) q.setSample (ch, i, ch < 2 ? music * (float) std::sin (0.04 * i) : 0.0f);
+        const auto qin = q;
+        runBlocks (q, block, [&] (auto& v) { quiet.processBlock (v, mb); });
+        float diff = 0.0f;
+        for (int i = 0; i < q.getNumSamples(); ++i) diff = juce::jmax (diff, std::abs (q.getSample (0, i) - qin.getSample (0, i)));
+        check (diff < 1.0e-6f, "with nothing on the sidechain, Music Ducker leaves the music untouched");
+
+        // Leaving Music Ducker for any other preset puts Traverse back on its own input.
+        proc.setCurrentProgram (0);
+        check (! proc.getModule().isKeyedFromSidechain(), "picking Default after Music Ducker switches Key back to Own input");
+
+        // Pip's walkthrough is there for Music Ducker only, and each step fits his three lines.
+        Traverse t;
+        bool shortSteps = true;
+        for (const auto& step : t.getPipTutorial (Traverse::musicDucker)) shortSteps &= step.length() <= 230;
+        check (t.getPipTutorial (Traverse::musicDucker).size() == 6 && t.getPipTutorial (0).isEmpty() && shortSteps,
+               "Pip has a six-step walkthrough for Music Ducker, none for the others, every step short");
+    }
+
     std::cout << "Spectrum display" << std::endl;
     {
         auto bandOf = [] (double hz)

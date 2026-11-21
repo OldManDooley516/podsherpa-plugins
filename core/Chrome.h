@@ -616,10 +616,11 @@ private:
         if (! hasLevel) return;
         auto words = plot.reduced (10, 8).removeFromTop (40);
         g.setFont (type::font (type::support, true));
+        const bool keyed = module.isKeyedFromSidechain();
         if (level < -60.0f)
-        {
-            g.setColour (theme.dim);
-            g.drawText ("No signal", words.removeFromTop (20), juce::Justification::topLeft);
+        {   // reacting to a sidechain that carries nothing is a routing problem, so it is amber
+            g.setColour (keyed ? theme.warn : theme.dim);
+            g.drawText (keyed ? "Nothing on the sidechain" : "No signal", words.removeFromTop (20), juce::Justification::topLeft);
             return;
         }
         const float x = xOf (level), y = yOf (module.curveOutputDb (level));
@@ -631,7 +632,7 @@ private:
         g.drawEllipse (juce::Rectangle<float> (11.0f, 11.0f).withCentre ({ x, y }), 1.5f);
 
         g.setColour (theme.text);
-        g.drawText ("Voice now " + juce::String (juce::roundToInt (level)) + " dB", words.removeFromTop (20), juce::Justification::topLeft);
+        g.drawText ((keyed ? "Sidechain now " : "Voice now ") + juce::String (juce::roundToInt (level)) + " dB", words.removeFromTop (20), juce::Justification::topLeft);
         const float under = th - level;
         if (under > 0.5f)
         {
@@ -1130,7 +1131,7 @@ public:
             };
             item ("Reduction", theme.accent2, true);
             item ("Out", theme.accent, false);
-            item ("In", theme.dim.withAlpha (0.55f), true);
+            item (module != nullptr && module->isKeyedFromSidechain() ? "Sidechain" : "In", theme.dim.withAlpha (0.55f), true);
         }
 
         // Left: what this is, or in amber what you are hearing instead of the normal output.

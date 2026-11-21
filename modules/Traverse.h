@@ -13,12 +13,18 @@ namespace ps
     shows input and output level behind the 12-second reduction history. Delta plays only what
     the squeeze takes off the voice: the input minus the compressed signal before Makeup, so it
     is the part that is being pushed down, not the level boost. It fades in and out over 10 ms,
-    is never saved, and leaves the audio bit-identical when off. Input and output gain and the
-    bypass crossfade are handled by the shared core. */
+    is never saved, and leaves the audio bit-identical when off.
+
+    Sidechain (Nov 21): Key picks what the level detector listens to, the track's own audio or
+    the plugin's Sidechain input (the louder of its channels, the same 10 ms detector). With
+    nothing connected the detector hears silence and Traverse leaves the audio alone. The Music
+    Ducker preset uses it: put Traverse on the music, feed the voice to the sidechain, and the
+    music dips while someone talks. Pip walks a beginner through the routing. Input and output
+    gain and the bypass crossfade are handled by the shared core. */
 class Traverse : public Module
 {
 public:
-    enum { pThreshold, pRatio, pAttack, pRelease, pKnee, pMakeup, pMix, pDelta };
+    enum { pThreshold, pRatio, pAttack, pRelease, pKnee, pMakeup, pMix, pDelta, pKey };
     Traverse() : Module ({ ParamSpec::number ("threshold", "Threshold", "dB", -48.0f, 0.0f, -18.0f).says ("Where it starts squeezing. Lower means more of the voice gets worked on."),
                            ParamSpec::number ("ratio", "Ratio", ":1", 1.0f, 8.0f, 2.0f).says ("How hard it squeezes once it starts."),
                            ParamSpec::number ("attack", "Attack", "ms", 2.0f, 150.0f, 25.0f, false, 0).says ("How quickly it clamps down. Fast tames hard consonants, slow lets them through."),
@@ -27,7 +33,9 @@ public:
                            ParamSpec::number ("makeup", "Makeup", "dB", -18.0f, 18.0f, 0.0f).says ("Puts the level back up after the squeezing has taken it down."),
                            ParamSpec::number ("mix", "Mix", "%", 0.0f, 100.0f, 100.0f, false, 0) .says ("Blends the squeezed voice back with the untouched one. Lower keeps more of the original."),
                            ParamSpec::toggle ("delta", "Delta", false).notSaved()
-                               .says ("Plays only what the squeezing takes off the voice.") }) {}
+                               .says ("Plays only what the squeezing takes off the voice."),
+                           ParamSpec::choice ("key", "Key", { "Own input", "Sidechain" }, 0)
+                               .says ("What it reacts to: this track, or another one fed to the sidechain.") }) {}
     juce::String getModuleId() const override { return "traverse"; }
     juce::String getDisplayName() const override { return "Traverse"; }
     juce::String getSubtitle() const override { return "Speech compressor"; }
@@ -48,6 +56,8 @@ public:
         outDb = toDb (maxOutPow.exchange (0.0f));
         return true;
     }
+    bool wantsSidechain() const override { return true; }
+    bool isKeyedFromSidechain() const override { return getParam (pKey) >= 0.5f; }
     int getCurveThresholdParam() const override { return pThreshold; }
     int getCurveRatioParam() const override { return pRatio; }
     juce::String getAuditionWarning() const override
@@ -76,6 +86,7 @@ public:
         const double tTh = getParam (pThreshold), tRat = getParam (pRatio), tKn = getParam (pKnee), tMk = getParam (pMakeup),
                      tWet = getParam (pMix) / 100.0, tAtt = getParam (pAttack), tRel = getParam (pRelease);
         const double ln10 = std::log (10.0), q = 1.0 - paramC;
+        const bool keyed = getParam (pKey) >= 0.5f && (sidechain == nullptr || sidechain->getNumSamples() >= n);
         float blockMax = 0.0f, inMax = 0.0f, outMax = 0.0f;
         const double deltaTarget = getParam (pDelta) >= 0.5f ? 1.0 : 0.0, deltaStep = 1.0 / (0.01 * sampleRate);
         for (int i = 0; i < n; ++i)
@@ -85,7 +96,9 @@ public:
             attackMs = paramC * attackMs + q * tAtt; releaseMs = paramC * releaseMs + q * tRel;
 
             double peakSq = 0.0;
-            for (int c = 0; c < nc; ++c) { const double x = b.getSample (c, i); peakSq = juce::jmax (peakSq, x * x); }
+            if (! keyed) for (int c = 0; c < nc; ++c) { const double x = b.getSample (c, i); peakSq = juce::jmax (peakSq, x * x); }
+            else if (sidechain != nullptr)   // no sidechain connected: the detector hears silence
+                for (int c = 0; c < sidechain->getNumChannels(); ++c) { const double x = sidechain->getSample (c, i); peakSq = juce::jmax (peakSq, x * x); }
             power = rmsC * power + (1.0 - rmsC) * peakSq;
             const double level = 10.0 * std::log (juce::jmax (1.0e-12, power)) / ln10;
             const double wanted = reduction (level, th, rat, kn);
@@ -120,13 +133,23 @@ public:
         storeMax (maxOutPow, outMax);
     }
 
-    /** Factory presets from the JSFX: threshold, ratio, attack, release, makeup, mix. Knee is not touched. */
-    struct Preset { const char* name; float threshold, ratio, attack, release, makeup, mix; };
-    static const std::array<Preset, 6>& factoryPresets()
+    /** Factory presets: the six from the JSFX (threshold, ratio, attack, release, makeup, mix;
+        knee left alone), plus Music Ducker (Nov 21), which also sets Knee and keys from the
+        sidechain. Every preset sets Key, so leaving Music Ducker for another preset puts the
+        detector back on the track's own audio. knee < 0 means leave Knee where it is. */
+    struct Preset { const char* name; float threshold, ratio, attack, release, makeup, mix, knee = -1.0f; int key = 0; };
+    enum { musicDucker = 6 };
+    static const std::array<Preset, 7>& factoryPresets()
     {
-        static const std::array<Preset, 6> p { { { "Default", -18, 2, 25, 180, 0, 100 }, { "Natural Voice", -20, 1.6f, 30, 220, 1.5f, 100 },
+        // Music Ducker: a voice around -20 dB on the sidechain is 20 dB over the threshold, so
+        // at 8:1 the music comes down about 17 dB, inside the 15 to 20 dB usually asked of a
+        // bed under speech. 10 ms in so the first word is clear; 350 ms out, so the music is
+        // most of the way back within a second of a pause without swelling up between syllables
+        // too much. Release is the time to get about two thirds of the way back.
+        static const std::array<Preset, 7> p { { { "Default", -18, 2, 25, 180, 0, 100 }, { "Natural Voice", -20, 1.6f, 30, 220, 1.5f, 100 },
             { "Radio Voice", -24, 3.5f, 10, 120, 4, 100 }, { "Interview Guest", -24, 2.5f, 15, 250, 3, 100 },
-            { "Heavy Squeeze", -30, 5, 8, 150, 6, 100 }, { "Gentle Glue", -30, 4, 20, 200, 3, 50 } } };
+            { "Heavy Squeeze", -30, 5, 8, 150, 6, 100 }, { "Gentle Glue", -30, 4, 20, 200, 3, 50 },
+            { "Music Ducker", -40, 8, 10, 350, 0, 100, 12.0f, 1 } } };
         return p;
     }
 
@@ -137,6 +160,26 @@ public:
         const auto& p = factoryPresets()[(size_t) i];
         setParam (pThreshold, p.threshold); setParam (pRatio, p.ratio); setParam (pAttack, p.attack);
         setParam (pRelease, p.release); setParam (pMakeup, p.makeup); setParam (pMix, p.mix);
+        if (p.knee >= 0.0f) setParam (pKnee, p.knee);
+        setParam (pKey, (float) p.key);
+    }
+
+    /** Pip's ducking walkthrough. Written for REAPER, where Sean works; the routing step says
+        how in plain terms and names the menu items as REAPER labels them. */
+    juce::StringArray getPipTutorial (int preset) const override
+    {
+        if (preset != musicDucker) return {};
+        return { "Music Ducker turns your music down while someone talks and brings it back in the pauses. "
+                     "First, check that Traverse is on your music track, not your voice track.",
+                 "Now send your voice to Traverse. The quick way: drag the voice track's Route button and drop it on this window. "
+                     "REAPER makes the send for you.",
+                 "Check the send: click Route on the voice track. The send to your music track should say Audio 1/2 to 3/4. "
+                     "Channels 3 and 4 are Traverse's Sidechain input.",
+                 "Press play. When someone talks the music should dip, and the blue Reduction line below shows by how much. "
+                     "If the dot says nothing is on the sidechain, check the send again.",
+                 "To change how far the music drops, drag the dot left for more or right for less. "
+                     "About 15 to 20 dB under the voice is a good place to start.",
+                 "If the music swells back up between words, raise Release. That's it: your music now steps aside on its own." };
     }
 
 private:

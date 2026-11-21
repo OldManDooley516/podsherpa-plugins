@@ -91,6 +91,11 @@ int main (int argc, char** argv)
     if (auto* se = dynamic_cast<SinglePluginEditor*> (ed.get()))
         se->setLookForShot (look, mode);
 
+    // PS_SHOT_PIPSTEP=<n> (with PS_SHOT_PRESET) shows step n of that preset's Pip walkthrough.
+    if (const auto ps = juce::SystemStats::getEnvironmentVariable ("PS_SHOT_PIPSTEP", {}); ps.isNotEmpty())
+        if (auto* se = dynamic_cast<SinglePluginEditor*> (ed.get()))
+            se->pipStepForShot (ps.getIntValue());
+
     const int w = argc > 5 ? juce::String (argv[5]).getIntValue() : ed->getWidth();
     const int h = argc > 6 ? juce::String (argv[6]).getIntValue() : ed->getHeight();
     ed->setSize (w, h);
