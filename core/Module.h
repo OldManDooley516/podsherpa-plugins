@@ -75,6 +75,8 @@ public:
     virtual bool hasSpectrum() const { return false; }
 
     virtual bool hasTransferCurve() const { return false; }
+    /** The curve card's heading: an expander (Glade) is not a compressor. */
+    virtual juce::String getCurveTitle() const { return "Compression curve"; }
     virtual float curveOutputDb (float inputDb) const { return inputDb; }
     virtual float getCurveThresholdDb() const { return -60.0f; }
     /** The level the module's own detector saw, and the level that came out, both in dBFS and
