@@ -77,6 +77,15 @@ public:
     virtual bool hasTransferCurve() const { return false; }
     virtual float curveOutputDb (float inputDb) const { return inputDb; }
     virtual float getCurveThresholdDb() const { return -60.0f; }
+    /** The level the module's own detector saw, and the level that came out, both in dBFS and
+        both the loudest since the last read (reading clears them). The editor puts a dot on the
+        curve at the input level and draws both as traces behind the reduction history, so you
+        can see whether the voice is reaching the threshold at all. False: nothing to show. */
+    virtual bool readCurveLevels (float& /*inDb*/, float& /*outDb*/) { return false; }
+    /** Parameters the curve's threshold dot moves: sideways sets the first (threshold, dB),
+        up and down the second (ratio). -1 where a module has no such control. */
+    virtual int getCurveThresholdParam() const { return -1; }
+    virtual int getCurveRatioParam() const { return -1; }
 
     virtual juce::String getExtraReadout() const { return {}; }
     virtual bool extraReadoutIsGood() const { return true; }

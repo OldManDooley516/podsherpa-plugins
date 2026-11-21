@@ -270,7 +270,8 @@ public:
         if (p.getModule().hasTransferCurve())
         {
             curve = std::make_unique<TransferCurve> (theme, p.getModule());
-            history = std::make_unique<ReductionHistory> (theme);
+            curve->setParams (p.getModuleParams());
+            history = std::make_unique<ReductionHistory> (theme, &p.getModule());
             addAndMakeVisible (*curve);
             addAndMakeVisible (*history);
         }
@@ -315,6 +316,7 @@ public:
     }
     void tickForShot() { timerCallback(); }
     ResponseCurve* responseForShot() { return response.get(); }
+    TransferCurve* curveForShot() { return curve.get(); }
 
     void paint (juce::Graphics& g) override
     {
@@ -600,7 +602,9 @@ private:
         outMeterBar.tick();
         moduleMeter = proc.getModule().readModuleMeter();
         if (reduction != nullptr) reduction->push (moduleMeter);
-        if (history != nullptr) history->push (moduleMeter);
+        float levelIn = -200.0f, levelOut = -200.0f;
+        if (curve != nullptr && proc.getModule().readCurveLevels (levelIn, levelOut)) curve->pushLevel (levelIn);
+        if (history != nullptr) history->push (moduleMeter, levelIn, levelOut);
         if (curve != nullptr) curve->repaint();   // the curve follows the controls as they move
         if (response != nullptr)
         {
