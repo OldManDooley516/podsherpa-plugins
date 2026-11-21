@@ -18,6 +18,12 @@ Put one of these lines in the pull request description so the receiving assistan
 
 Include the plugin name, the user-facing change, available build or test evidence, the result of any REAPER listening check, and the next step. Mark listening as pending when it has yet to happen. This is a public repository. Use information already public here for automated handoffs.
 
+## Private project handoffs
+
+Use the private handoff repository for internal project decisions, listening results, and notes for Claude. Keep client recordings in the private test audio repository. Record public implementation and review notes on the corresponding plugin pull request.
+
+The automation described below handles public pull requests. For private handoffs, confirm that Claude can read the private repository and record an acknowledgement before marking the handoff received.
+
 ## ChatGPT automation
 
 The automation posts producer notes on Claude handoffs targeting `main` when the pull request is open for review or merged. Review notes include the head commit SHA. Merge notes include the merge commit SHA. Record follow-up discussion on the same pull request.
