@@ -3,6 +3,8 @@
 #include "SuiteSettings.h"
 #include "Meters.h"
 #include "Module.h"
+#include "Spectrum.h"
+#include "HostParam.h"
 #include <juce_audio_processors/juce_audio_processors.h>
 
 namespace ps
@@ -25,7 +27,7 @@ inline juce::Colour faceTextDim (const Theme& t)  { return t.silverButtons ? t.b
     Colour is never the only signal in this suite, so each segment carries its word as well as
     its fill, and the selected one is also raised. That is what lets the Look pill work in
     Graphite, where the three accents are close in value. */
-class Segmented : public juce::Component
+class Segmented : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     std::function<void (int)> onChange;
@@ -416,19 +418,49 @@ private:
     the shaded area between it and the curve. A dotted vertical line marks the threshold and a
     dot sits on the curve where it bends. Nothing here knows what compression is: it asks the
     module for an output level given an input level, so any module with a curve gets one. */
-class TransferCurve : public juce::Component
+class TransferCurve : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     TransferCurve (const Theme& t, const Module& m) : theme (t), module (m) {}
 
+    /** The host parameters the threshold dot moves, given by the editor. Without them (or for a
+        module that names none) the dot is drawn but cannot be dragged. Moves go through the host
+        with gestures, so automation records them and the sliders beside the curve follow. */
+    void setParams (std::vector<HostParam*> p)
+    {
+        params = std::move (p);
+        setTooltip (draggable() ? "Drag the dot: sideways sets Threshold, up and down sets Ratio. "
+                                  "Shift for fine control, double-click to reset both." : juce::String());
+    }
+
+    /** The detector level the module saw since the last tick, in dBFS. Rises at once and falls
+        at about 30 dB a second, so the dot is readable rather than a flicker. */
+    void pushLevel (float db)
+    {
+        level = db >= level ? db : juce::jmax (db, level - 1.0f);
+        hasLevel = true;
+    }
+
+    /** For ps_shot: put the live dot somewhere without running audio. */
+    void setLevelForShot (float db) { level = db; hasLevel = true; }
+    juce::Point<float> dotPositionForShot() const { return dotCentre(); }
+
     void paint (juce::Graphics& g) override
     {
         auto outer = getLocalBounds();
-        g.setColour (theme.dim);
-        g.setFont (type::font (type::support));
-        g.drawText ("Compression curve", outer.removeFromTop (20), juce::Justification::centredLeft);
+        {
+            // The header carries the values while the dot is held or hovered, and otherwise how
+            // to use it, so the hint is on screen rather than only in a tooltip.
+            const bool showValues = hover || dragging;
+            g.setColour (showValues ? theme.text : theme.dim);
+            g.setFont (type::font (type::support, showValues));
+            juce::String line = "Compression curve";
+            if (showValues) line = valuesLine();
+            else if (draggable()) line = "Compression curve. Drag the dot to set it.";
+            g.drawFittedText (line, outer.removeFromTop (20), juce::Justification::centredLeft, 1, 0.9f);
+        }
 
-        auto plot = outer.reduced (2);
+        const auto plot = plotBounds();
         g.setColour (theme.bg);
         g.fillRoundedRectangle (plot.toFloat(), 4.0f);
 
@@ -438,15 +470,24 @@ public:
             g.drawVerticalLine (plot.getX() + plot.getWidth() * i / 4, (float) plot.getY(), (float) plot.getBottom());
             g.drawHorizontalLine (plot.getY() + plot.getHeight() * i / 4, (float) plot.getX(), (float) plot.getRight());
         }
-
-        auto xOf = [&] (float db) { return plot.getX() + plot.getWidth() * (db + 60.0f) / 60.0f; };
-        auto yOf = [&] (float db) { return plot.getY() + plot.getHeight() * (-juce::jmax (-60.0f, db)) / 60.0f; };
+        // Grid values: input along the bottom, output up the left. Small, because they are
+        // reference marks, not readouts.
+        g.setColour (theme.dim.withAlpha (0.8f));
+        g.setFont (type::font (11.0f));
+        for (int i = 1; i < 4; ++i)
+        {
+            g.drawText (juce::String (-60 + 15 * i), juce::Rectangle<int> (30, 14).withCentre ({ plot.getX() + plot.getWidth() * i / 4, plot.getBottom() - 9 }),
+                        juce::Justification::centred);
+            g.drawText (juce::String (-15 * i), juce::Rectangle<int> (28, 14).withPosition (plot.getX() + 4, plot.getY() + plot.getHeight() * i / 4 - 15),
+                        juce::Justification::centredLeft);
+        }
+        g.drawText ("In, dB", plot.reduced (6, 2).removeFromBottom (14), juce::Justification::centredRight);
 
         // Threshold guide, dotted so it cannot be mistaken for the curve.
-        const float th = juce::jlimit (-60.0f, 0.0f, module.getCurveThresholdDb());
+        const float th = threshold();
         g.setColour (theme.warn.withAlpha (0.75f));
         for (int y = plot.getY(); y < plot.getBottom(); y += 8)
-            g.fillRect ((float) xOf (th), (float) y, 1.0f, 4.0f);
+            g.fillRect (xOf (th), (float) y, 1.0f, 4.0f);
 
         // Shaded gap between 1:1 and the curve: how much is being taken off, at a glance.
         constexpr int N = 169;
@@ -454,15 +495,14 @@ public:
         for (int i = 0; i < N; ++i)
         {
             const float d = -60.0f + 60.0f * (float) i / (float) (N - 1);
-            const float o = module.curveOutputDb (d);
-            const float x = (float) xOf (d), y = (float) yOf (o);
-            if (i == 0) { curve.startNewSubPath (x, y); fill.startNewSubPath (x, (float) yOf (d)); }
-            else        { curve.lineTo (x, y);          fill.lineTo (x, (float) yOf (d)); }
+            const float x = xOf (d), y = yOf (module.curveOutputDb (d));
+            if (i == 0) { curve.startNewSubPath (x, y); fill.startNewSubPath (x, yOf (d)); }
+            else        { curve.lineTo (x, y);          fill.lineTo (x, yOf (d)); }
         }
         for (int i = N - 1; i >= 0; --i)
         {
             const float d = -60.0f + 60.0f * (float) i / (float) (N - 1);
-            fill.lineTo ((float) xOf (d), (float) yOf (module.curveOutputDb (d)));
+            fill.lineTo (xOf (d), yOf (module.curveOutputDb (d)));
         }
         fill.closeSubPath();
         g.setColour (theme.accent2.withAlpha (0.28f));
@@ -470,16 +510,144 @@ public:
         g.setColour (theme.accent);
         g.strokePath (curve, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
+        paintLevel (g, plot, th);
+
+        // The threshold dot: bigger with a ring when it can be grabbed and the mouse is on it.
+        const auto c = dotCentre();
+        if (hover || dragging)
+        {
+            g.setColour (theme.warn.withAlpha (0.25f));
+            g.fillEllipse (juce::Rectangle<float> (24.0f, 24.0f).withCentre (c));
+        }
         g.setColour (theme.warn);
-        g.fillEllipse (juce::Rectangle<float> (9.0f, 9.0f).withCentre ({ (float) xOf (th), (float) yOf (module.curveOutputDb (th)) }));
+        const float d = draggable() ? 13.0f : 9.0f;
+        g.fillEllipse (juce::Rectangle<float> (d, d).withCentre (c));
+        if (draggable())
+        {
+            g.setColour (theme.bg);
+            g.drawEllipse (juce::Rectangle<float> (d, d).withCentre (c), 1.5f);
+        }
 
         g.setColour (theme.line);
         g.drawRoundedRectangle (plot.toFloat().reduced (0.5f), 4.0f, 1.0f);
     }
 
+    void mouseMove (const juce::MouseEvent& e) override { setHover (onDot (e.position)); }
+    void mouseExit (const juce::MouseEvent&) override { if (! dragging) setHover (false); }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (! draggable() || ! onDot (e.position)) return;
+        dragging = true;
+        lastPos = e.position;
+        for (auto* p : { param (module.getCurveThresholdParam()), param (module.getCurveRatioParam()) })
+            if (p != nullptr) p->beginChangeGesture();
+        repaint();
+    }
+
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! dragging) return;
+        const auto plot = plotBounds().toFloat();
+        // Relative moves, so Shift can be pressed mid-drag without a jump; fine is a fifth.
+        const float speed = e.mods.isShiftDown() ? 0.2f : 1.0f;
+        const float dx = (e.position.x - lastPos.x) * speed, dy = (e.position.y - lastPos.y) * speed;
+        lastPos = e.position;
+        if (auto* t = param (module.getCurveThresholdParam()))
+            t->setRealNotifyingHost (t->getReal() + dx * 60.0f / juce::jmax (1.0f, plot.getWidth()));
+        // Pulling the curve down squeezes harder. The whole height covers 1:1 to 8:1, evenly
+        // in ratio's own steps (each doubling takes the same distance).
+        if (auto* r = param (module.getCurveRatioParam()))
+            r->setRealNotifyingHost (r->getReal() * std::pow (8.0f, dy / juce::jmax (1.0f, plot.getHeight())));
+        repaint();
+    }
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (dragging)
+            for (auto* p : { param (module.getCurveThresholdParam()), param (module.getCurveRatioParam()) })
+                if (p != nullptr) p->endChangeGesture();
+        dragging = false;
+        setHover (onDot (e.position));
+        repaint();
+    }
+
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        if (! draggable() || ! onDot (e.position)) return;
+        for (auto* p : { param (module.getCurveThresholdParam()), param (module.getCurveRatioParam()) })
+            if (p != nullptr) { p->beginChangeGesture(); p->setRealNotifyingHost (p->getSpec().def); p->endChangeGesture(); }
+        repaint();
+    }
+
 private:
+    juce::Rectangle<int> plotBounds() const { return getLocalBounds().withTrimmedTop (20).reduced (2); }
+    float threshold() const { return juce::jlimit (-60.0f, 0.0f, module.getCurveThresholdDb()); }
+    float xOf (float db) const { const auto p = plotBounds(); return (float) p.getX() + (float) p.getWidth() * (juce::jlimit (-60.0f, 0.0f, db) + 60.0f) / 60.0f; }
+    float yOf (float db) const { const auto p = plotBounds(); return (float) p.getY() + (float) p.getHeight() * (-juce::jlimit (-60.0f, 0.0f, db)) / 60.0f; }
+    juce::Point<float> dotCentre() const { const float th = threshold(); return { xOf (th), yOf (module.curveOutputDb (th)) }; }
+    bool onDot (juce::Point<float> p) const { return draggable() && p.getDistanceFrom (dotCentre()) < 14.0f; }
+
+    HostParam* param (int i) const { return i >= 0 && i < (int) params.size() ? params[(size_t) i] : nullptr; }
+    bool draggable() const { return param (module.getCurveThresholdParam()) != nullptr; }
+
+    void setHover (bool h)
+    {
+        if (h == hover) return;
+        hover = h;
+        setMouseCursor (h ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+
+    juce::String valuesLine() const
+    {
+        juce::String s;
+        if (auto* t = param (module.getCurveThresholdParam())) s << "Threshold " << t->getSpec().text (t->getReal());
+        if (auto* r = param (module.getCurveRatioParam())) s << "    Ratio " << r->getSpec().text (r->getReal());
+        return s;
+    }
+
+    /** Where the voice is right now: a dot on the curve at the detector's level, a faint line
+        down to the input axis, and the level in words in the empty top-left of the plot. When
+        the voice is not reaching the threshold the words say so, because a compressor that is
+        doing nothing looks exactly like one that is set gently. */
+    void paintLevel (juce::Graphics& g, juce::Rectangle<int> plot, float th)
+    {
+        if (! hasLevel) return;
+        auto words = plot.reduced (10, 8).removeFromTop (40);
+        g.setFont (type::font (type::support, true));
+        const bool keyed = module.isKeyedFromSidechain();
+        if (level < -60.0f)
+        {   // reacting to a sidechain that carries nothing is a routing problem, so it is amber
+            g.setColour (keyed ? theme.warn : theme.dim);
+            g.drawText (keyed ? "Nothing on the sidechain" : "No signal", words.removeFromTop (20), juce::Justification::topLeft);
+            return;
+        }
+        const float x = xOf (level), y = yOf (module.curveOutputDb (level));
+        g.setColour (theme.text.withAlpha (0.35f));
+        g.drawVerticalLine ((int) x, y, (float) plot.getBottom());
+        g.setColour (theme.text);
+        g.fillEllipse (juce::Rectangle<float> (11.0f, 11.0f).withCentre ({ x, y }));
+        g.setColour (theme.bg);
+        g.drawEllipse (juce::Rectangle<float> (11.0f, 11.0f).withCentre ({ x, y }), 1.5f);
+
+        g.setColour (theme.text);
+        g.drawText ((keyed ? "Sidechain now " : "Voice now ") + juce::String (juce::roundToInt (level)) + " dB", words.removeFromTop (20), juce::Justification::topLeft);
+        const float under = th - level;
+        if (under > 0.5f)
+        {
+            g.setColour (theme.dim);
+            g.setFont (type::font (type::support));
+            g.drawText (juce::String (juce::roundToInt (under)) + " dB under the threshold", words, juce::Justification::topLeft);
+        }
+    }
+
     const Theme& theme;
     const Module& module;
+    std::vector<HostParam*> params;
+    float level = -100.0f;
+    bool hasLevel = false, hover = false, dragging = false;
+    juce::Point<float> lastPos;
 };
 
 //==============================================================================
@@ -487,18 +655,86 @@ private:
     and minus 18 dB, with the shaded area showing departure from flat.
 
     Like the transfer curve this is generic - it asks the module for a level in dB at a
-    frequency - so Contour Dynamic and Dropoff can offer one by implementing two methods. */
+    frequency - so Contour Dynamic and Dropoff can offer one by implementing two methods.
+
+    Behind the curve, for a module that asks for one, sits the spectrum of what goes in and what
+    comes out, as the JSFX draws it: input as a dim fill, output as a brighter fill with an
+    edge. The spectrum has its own scale (0 dBFS at the top, -90 at the bottom) because the EQ's
+    plus and minus 18 dB would put a voice off the bottom of the graph. The switch at the top
+    right picks Off, Out only, or In + Out, and the legend beside it names both colours. */
 class ResponseCurve : public juce::Component
 {
 public:
-    ResponseCurve (const Theme& t, const Module& m) : theme (t), module (m) {}
+    std::function<void (int)> onViewChange;
+
+    ResponseCurve (const Theme& t, const Module& m) : theme (t), module (m), viewSwitch (t, { "Off", "Out", "In + Out" })
+    {
+        if (module.hasSpectrum())
+        {
+            viewSwitch.onChange = [this] (int i) { view = i; if (onViewChange) onViewChange (i); repaint(); };
+            viewSwitch.setTooltip ("Shows the sound behind the curve: what comes out, or what goes in and what comes out.");
+            addAndMakeVisible (viewSwitch);
+        }
+    }
+
+    /** The editor hands over the two band arrays it updates on its timer. */
+    void setSpectrum (const std::array<float, SpectrumAnalyser::numBands>* in,
+                      const std::array<float, SpectrumAnalyser::numBands>* out)
+    {
+        specIn = in; specOut = out;
+    }
+    void setView (int v) { view = juce::jlimit (0, 2, v); viewSwitch.setIndex (view); repaint(); }
+    int getView() const { return view; }
+
+    static constexpr int headerH = 30;
+
+    void resized() override
+    {
+        if (module.hasSpectrum())
+        {
+            const int w = juce::jmax (210, viewSwitch.idealWidth());
+            viewSwitch.setBounds (getWidth() - w - 2, 0, w, headerH - 4);
+        }
+    }
 
     void paint (juce::Graphics& g) override
     {
         auto outer = getLocalBounds();
-        g.setColour (theme.dim);
-        g.setFont (type::font (type::support));
-        g.drawText ("Response", outer.removeFromTop (20), juce::Justification::centredLeft);
+        auto head = outer.removeFromTop (headerH);
+        const int heard = listeningTo();
+        const auto warning = module.getAuditionWarning();
+        g.setFont (type::font (type::support, active >= 0 || warning.isNotEmpty()));
+        g.setColour (active >= 0 ? theme.text : warning.isNotEmpty() ? theme.warn : theme.dim);
+        {
+            // While a dot is hovered or held, its values; otherwise how to use the dots. The hint
+            // stays on screen, as the standard asks, rather than living only in a tooltip.
+            auto textArea = head.withTrimmedBottom (4).withTrimmedRight (module.hasSpectrum() ? viewSwitch.getWidth() + 130 : 0);
+            juce::String line = "Response";
+            if (active >= 0) line = readout (active);
+            else if (warning.isNotEmpty()) line = warning;
+            else if (! handles.empty())
+                line = juce::String ("Drag dots to shape. Shift: fine. Scroll: width. ")
+                     + (juce::SystemStats::getOperatingSystemType() & juce::SystemStats::MacOSX ? "Option" : "Alt") + "-drag: solo the band.";
+            g.drawFittedText (line, textArea, juce::Justification::centredLeft, 1, 0.9f);
+        }
+
+        // Legend: the colours never stand alone, each has its word beside it.
+        if (module.hasSpectrum() && view > 0)
+        {
+            auto leg = head.withTrimmedBottom (4).withTrimmedRight (viewSwitch.getWidth() + 16);
+            auto item = [&] (const juce::String& word, juce::Colour c)
+            {
+                const int tw = juce::GlyphArrangement::getStringWidthInt (type::font (type::support), word);
+                auto r = leg.removeFromRight (tw + 22);
+                g.setColour (c);
+                g.fillRoundedRectangle (r.removeFromLeft (14).withSizeKeepingCentre (14, 8).toFloat(), 2.0f);
+                g.setColour (theme.dim);
+                g.drawText (word, r.withTrimmedLeft (5), juce::Justification::centredLeft);
+                leg.removeFromRight (10);
+            };
+            item ("Out", outColour());
+            if (view == 2) item ("In", inColour());
+        }
 
         auto plot = outer.reduced (2);
         g.setColour (theme.bg);
@@ -514,6 +750,15 @@ public:
             return (float) (plot.getCentreY() - plot.getHeight() * juce::jlimit (-18.0, 18.0, db) / 36.0);
         };
 
+        // The spectrum first, so the grid and the curve sit on top of it.
+        if (module.hasSpectrum() && view > 0)
+        {
+            juce::Graphics::ScopedSaveState clip (g);
+            g.reduceClipRegion (plot);
+            if (view == 2 && specIn != nullptr) drawSpectrum (g, *specIn, plot, inColour(), false);
+            if (specOut != nullptr) drawSpectrum (g, *specOut, plot, outColour(), true);
+        }
+
         // Decade lines, and the 6 dB grid.
         g.setColour (theme.line.withAlpha (0.5f));
         for (double hz : { 100.0, 1000.0, 10000.0 })
@@ -523,12 +768,16 @@ public:
         g.setColour (theme.line);
         g.drawHorizontalLine ((int) yOf (0.0), (float) plot.getX(), (float) plot.getRight());
 
-        g.setColour (theme.dim.withAlpha (0.7f));
-        g.setFont (type::font (11.0f));
+        g.setColour (theme.dim.withAlpha (0.8f));
+        g.setFont (type::font (12.0f));
         for (auto [hz, label] : { std::pair<double, const char*> { 100.0, "100" },
                                   { 1000.0, "1k" }, { 10000.0, "10k" } })
             g.drawText (label, juce::Rectangle<int> (40, 14).withCentre ({ (int) xOf (hz), plot.getBottom() - 9 }),
                         juce::Justification::centred);
+        // The EQ's dB scale, down the left edge, so a boost can be read off the graph.
+        for (double db : { 12.0, 6.0, 0.0, -6.0, -12.0 })
+            g.drawText ((db > 0 ? "+" : "") + juce::String ((int) db),
+                        juce::Rectangle<int> (plot.getX() + 5, (int) yOf (db) - 8, 30, 16), juce::Justification::centredLeft);
 
         const int N = juce::jmax (2, plot.getWidth());
         juce::Path curve, fill;
@@ -550,11 +799,271 @@ public:
 
         g.setColour (theme.line);
         g.drawRoundedRectangle (plot.toFloat().reduced (0.5f), 4.0f, 1.0f);
+
+        // The dots. On: filled with the accent, its number knocked out. Off: an outline with a
+        // dim number, so "off" is shown by shape and word as well as colour. The one under the
+        // mouse grows and gets a ring.
+        for (int i = (int) handles.size() - 1; i >= 0; --i)
+        {
+            const auto c = handleCentre (i);
+            const bool on = isOn (i), hot = i == active;
+            const float r = hot ? dotR + 2.0f : dotR;
+            auto dot = juce::Rectangle<float> (r * 2.0f, r * 2.0f).withCentre (c);
+            if (hot)
+            {
+                g.setColour (theme.accent.withAlpha (0.3f));
+                g.fillEllipse (dot.expanded (5.0f));
+            }
+            if (i == heard)
+            {   // the band being heard: an amber ring, with the words in the header line
+                g.setColour (theme.warn);
+                g.drawEllipse (dot.expanded (4.0f), 2.5f);
+            }
+            if (on)
+            {
+                g.setColour (theme.accent);
+                g.fillEllipse (dot);
+                g.setColour (theme.bg);
+            }
+            else
+            {
+                g.setColour (theme.bg.withAlpha (0.85f));
+                g.fillEllipse (dot);
+                g.setColour (theme.dim);
+                g.drawEllipse (dot.reduced (0.75f), 1.5f);
+            }
+            g.setFont (type::font (handles[(size_t) i].shortName.length() > 1 ? 11.0f : 13.0f, true));
+            g.drawText (handles[(size_t) i].shortName, dot.toNearestInt(), juce::Justification::centred);
+        }
     }
 
+    //==========================================================================
+    /** The host parameters the dots move. Given by the editor; without them the dots are not
+        drawn (Basecamp's compact cards, for now). Moves go through the host, with gestures, so
+        automation records them and the knobs below follow. */
+    void setHandleParams (std::vector<HostParam*> p)
+    {
+        params = std::move (p);
+        handles = params.empty() ? std::vector<Module::CurveHandle> {} : module.getCurveHandles();
+        repaint();
+    }
+
+    /** For ps_shot: where dot i is drawn, so a scripted drag can start on it. */
+    juce::Point<float> handlePositionForShot (int i) const { return handleCentre (i); }
+
+    void mouseMove (const juce::MouseEvent& e) override { setActive (hit (e.position)); }
+    void mouseExit (const juce::MouseEvent&) override { if (! dragging) setActive (-1); }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        const int h = hit (e.position);
+        setActive (h);
+        if (h < 0) return;
+        if (e.mods.isPopupMenu())   // right-click turns a band on or off
+        {
+            if (auto* on = param (handles[(size_t) h].on))
+            {
+                on->beginChangeGesture(); on->setRealNotifyingHost (on->getReal() >= 0.5f ? 0.0f : 1.0f); on->endChangeGesture();
+                repaint();
+            }
+            return;
+        }
+        dragging = true;
+        lastPos = e.position;
+        if (e.mods.isAltDown())
+            if (auto* l = param (module.getSoloParam()))
+            {   // solo this band while it is held, so it can be swept to find a problem
+                listenBefore = l->getReal();
+                l->beginChangeGesture(); l->setRealNotifyingHost ((float) (h + 1));
+                heldListen = true;
+            }
+        const auto& hd = handles[(size_t) h];
+        for (int id : { hd.freq, hd.gain }) if (auto* p = param (id)) p->beginChangeGesture();
+        if (auto* on = param (hd.on); on != nullptr && on->getReal() < 0.5f)
+        {   // grabbing a band that is off brings it in, as dragging it would be pointless otherwise
+            on->beginChangeGesture(); on->setRealNotifyingHost (1.0f); on->endChangeGesture();
+        }
+    }
+
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! dragging || active < 0) return;
+        const auto plot = plotBounds().toFloat();
+        // Moves are relative to the last position, so Shift can be pressed mid-drag without
+        // the dot jumping: fine control is a fifth of the speed.
+        const float speed = e.mods.isShiftDown() ? 0.2f : 1.0f;
+        const float dx = (e.position.x - lastPos.x) * speed, dy = (e.position.y - lastPos.y) * speed;
+        lastPos = e.position;
+        const auto& hd = handles[(size_t) active];
+        if (auto* f = param (hd.freq))
+            f->setRealNotifyingHost (f->getReal() * std::pow (1000.0f, dx / juce::jmax (1.0f, plot.getWidth())));
+        if (auto* gp = param (hd.gain))
+            gp->setRealNotifyingHost (gp->getReal() - dy * 36.0f / juce::jmax (1.0f, plot.getHeight()));
+        repaint();
+    }
+
+    void mouseUp (const juce::MouseEvent& e) override
+    {
+        if (dragging && active >= 0)
+        {
+            const auto& hd = handles[(size_t) active];
+            for (int id : { hd.freq, hd.gain }) if (auto* p = param (id)) p->endChangeGesture();
+        }
+        if (heldListen)
+            if (auto* l = param (module.getSoloParam()))
+            {   // put Solo back the way it was before the Alt-drag
+                l->setRealNotifyingHost (listenBefore); l->endChangeGesture();
+            }
+        heldListen = false;
+        dragging = false;
+        setActive (hit (e.position));
+    }
+
+    /** Double-click puts a band back where it started: frequency, gain and width. */
+    void mouseDoubleClick (const juce::MouseEvent& e) override
+    {
+        const int h = hit (e.position);
+        if (h < 0) return;
+        const auto& hd = handles[(size_t) h];
+        for (int id : { hd.freq, hd.gain, hd.q })
+            if (auto* p = param (id)) { p->beginChangeGesture(); p->setRealNotifyingHost (p->getSpec().def); p->endChangeGesture(); }
+        repaint();
+    }
+
+    /** The wheel over a dot sets its width (Q). One notch is about 10 percent, Shift a fifth
+        of that. Bands without a width ignore it, and the wheel scrolls the window instead. */
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        const int h = hit (e.position);
+        auto* q = h >= 0 ? param (handles[(size_t) h].q) : nullptr;
+        if (q == nullptr) { Component::mouseWheelMove (e, w); return; }
+        const float notches = (w.deltaY != 0.0f ? w.deltaY : w.deltaX) * (w.isReversed ? -1.0f : 1.0f) / 0.25f;
+        const float step = e.mods.isShiftDown() ? 0.02f : 0.1f;
+        q->beginChangeGesture();
+        q->setRealNotifyingHost (q->getReal() * std::pow (1.0f + step, notches));
+        q->endChangeGesture();
+        setActive (h);
+        repaint();
+    }
+
+    /** Spectrum scale: 0 dBFS at the top of the plot, specFloorDb at the bottom. */
+    static constexpr float specFloorDb = -90.0f;
+
 private:
+    // Input is a neutral grey-blue in every Look so it reads as "before"; output borrows the
+    // Look's second accent, kept distinct from the curve's own colour.
+    juce::Colour inColour() const  { return theme.dim; }
+    juce::Colour outColour() const { return theme.accent2; }
+
+    void drawSpectrum (juce::Graphics& g, const std::array<float, SpectrumAnalyser::numBands>& b,
+                       juce::Rectangle<int> plot, juce::Colour c, bool edge)
+    {
+        auto yOf = [&] (float db)
+        {
+            const float a = juce::jlimit (0.0f, 1.0f, (db - specFloorDb) / -specFloorDb);
+            return (float) plot.getBottom() - a * (float) plot.getHeight();
+        };
+        auto xOfBand = [&] (int k)
+        {
+            const double a = (k + 0.5) / SpectrumAnalyser::numBands;   // bands span 20 Hz..20 kHz
+            return (float) (plot.getX() + plot.getWidth() * a);
+        };
+        juce::Path line, area;
+        area.startNewSubPath ((float) plot.getX(), (float) plot.getBottom());
+        area.lineTo ((float) plot.getX(), yOf (b[0]));
+        for (int k = 0; k < SpectrumAnalyser::numBands; ++k)
+        {
+            const float x = xOfBand (k), y = yOf (b[(size_t) k]);
+            if (k == 0) line.startNewSubPath ((float) plot.getX(), y);
+            line.lineTo (x, y);
+            area.lineTo (x, y);
+        }
+        const float yEnd = yOf (b[SpectrumAnalyser::numBands - 1]);
+        line.lineTo ((float) plot.getRight(), yEnd);
+        area.lineTo ((float) plot.getRight(), yEnd);
+        area.lineTo ((float) plot.getRight(), (float) plot.getBottom());
+        area.closeSubPath();
+        g.setColour (c.withAlpha (edge ? 0.22f : 0.18f));
+        g.fillPath (area);
+        g.setColour (c.withAlpha (edge ? 0.75f : 0.45f));
+        g.strokePath (line, juce::PathStrokeType (edge ? 1.4f : 1.0f, juce::PathStrokeType::curved));
+    }
+
+    static constexpr float dotR = 11.0f;
+
+    juce::Rectangle<int> plotBounds() const { return getLocalBounds().withTrimmedTop (headerH).reduced (2); }
+
+    HostParam* param (int id) const { return id >= 0 && id < (int) params.size() ? params[(size_t) id] : nullptr; }
+    bool isOn (int i) const { auto* p = param (handles[(size_t) i].on); return p == nullptr || p->getReal() >= 0.5f; }
+
+    /** Where a dot sits: its frequency across, its gain up and down. Bands without a gain (the
+        high-pass) sit on the 0 dB line. Clamped inside the plot so a band at an extreme stays
+        grabbable. */
+    juce::Point<float> handleCentre (int i) const
+    {
+        const auto plot = plotBounds().toFloat();
+        const auto& hd = handles[(size_t) i];
+        const float hz = param (hd.freq) != nullptr ? param (hd.freq)->getReal() : 1000.0f;
+        const float db = param (hd.gain) != nullptr ? param (hd.gain)->getReal() : 0.0f;
+        const float a = (float) (std::log10 (juce::jlimit (20.0, 20000.0, (double) hz) / 20.0) / 3.0);
+        const float x = plot.getX() + plot.getWidth() * a;
+        const float y = plot.getCentreY() - plot.getHeight() * juce::jlimit (-18.0f, 18.0f, db) / 36.0f;
+        return { juce::jlimit (plot.getX() + dotR, plot.getRight() - dotR, x),
+                 juce::jlimit (plot.getY() + dotR, plot.getBottom() - dotR, y) };
+    }
+
+    /** The dot under a point, nearest first; dots are drawn so the lowest number is on top. */
+    int hit (juce::Point<float> p) const
+    {
+        int best = -1; float bestD = (dotR + 5.0f) * (dotR + 5.0f);
+        for (int i = 0; i < (int) handles.size(); ++i)
+        {
+            const float d = handleCentre (i).getDistanceSquaredFrom (p);
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+    }
+
+    void setActive (int i)
+    {
+        if (dragging && i != active) return;   // keep the held dot while the mouse runs ahead of it
+        if (i == active) return;
+        active = i;
+        setMouseCursor (i >= 0 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+
+    juce::String readout (int i) const
+    {
+        const auto& hd = handles[(size_t) i];
+        juce::String t = hd.name;
+        if (auto* f = param (hd.freq)) t << "   " << f->getSpec().text (f->getReal());
+        if (auto* gp = param (hd.gain)) { const float v = gp->getReal(); t << "   " << (v > 0.05f ? "+" : "") << gp->getSpec().text (v); }
+        if (auto* q = param (hd.q)) t << "   Q " << q->getSpec().text (q->getReal());
+        if (! isOn (i)) t << "   (off)";
+        return t;
+    }
+
     const Theme& theme;
     const Module& module;
+    Segmented viewSwitch;
+    std::vector<HostParam*> params;
+    std::vector<Module::CurveHandle> handles;
+    juce::Point<float> lastPos;
+    int active = -1;
+    bool dragging = false, heldListen = false;
+    float listenBefore = 0.0f;
+
+    /** The handle being soloed, or -1. */
+    int listeningTo() const
+    {
+        auto* l = param (module.getSoloParam());
+        const int v = l != nullptr ? juce::roundToInt (l->getReal()) : 0;
+        return v >= 1 && v <= (int) handles.size() ? v - 1 : -1;
+    }
+    const std::array<float, SpectrumAnalyser::numBands>* specIn = nullptr;
+    const std::array<float, SpectrumAnalyser::numBands>* specOut = nullptr;
+    int view = 2;
 };
 
 //==============================================================================
@@ -567,16 +1076,27 @@ private:
 class ReductionHistory : public juce::Component
 {
 public:
-    explicit ReductionHistory (const Theme& t) : theme (t) { hist.fill (0.0f); }
+    explicit ReductionHistory (const Theme& t, const Module* m = nullptr) : theme (t), module (m)
+    {
+        hist.fill (0.0f); inHist.fill (-100.0f); outHist.fill (-100.0f);
+    }
 
-    void push (float db)
+    /** Reduction in dB, plus, for a module that reports them, the input and output levels in
+        dBFS (pass anything below -100 for none). The loudest of each since the last slot wins. */
+    void push (float db, float inDb = -200.0f, float outDb = -200.0f)
     {
         pending = juce::jmax (pending, db);
+        pendingIn = juce::jmax (pendingIn, inDb);
+        pendingOut = juce::jmax (pendingOut, outDb);
+        if (inDb > -150.0f) showLevels = true;
         if (++sinceWrite < 2) return;          // the editor ticks at 30 Hz; this wants 20
         sinceWrite = 0;
         hist[head] = juce::jmax (0.0f, pending);
+        inHist[head] = pendingIn;
+        outHist[head] = pendingOut;
         head = (head + 1) % slots;
         pending = 0.0f;
+        pendingIn = pendingOut = -200.0f;
         repaint();
     }
 
@@ -589,13 +1109,38 @@ public:
         for (auto v : hist) peak = juce::jmax (peak, v);
         const float span = juce::jmax (6.0f, std::ceil (peak / 6.0f) * 6.0f);
 
-        g.setColour (theme.dim);
-        g.setFont (type::font (type::support));
-        g.drawText ("Gain reduction, last 12 seconds", top, juce::Justification::centredLeft);
+        // Right side of the header: the numbers, then a legend naming every colour in the plot.
         g.setColour (theme.accent2);
         g.setFont (type::font (type::support, true));
-        g.drawText ("now " + juce::String (hist[(head + slots - 1) % slots], 1)
-                    + "    max " + juce::String (peak, 1) + " dB", top, juce::Justification::centredRight);
+        const auto nums = "now " + juce::String (hist[(head + slots - 1) % slots], 1) + "    max " + juce::String (peak, 1) + " dB";
+        g.drawText (nums, top, juce::Justification::centredRight);
+        auto rest = top.withTrimmedRight (juce::GlyphArrangement::getStringWidthInt (type::font (type::support, true), nums) + 22);
+        if (showLevels)
+        {
+            g.setFont (type::font (type::support));
+            auto item = [&] (const juce::String& word, juce::Colour c, bool fillSwatch)
+            {
+                const int w = juce::GlyphArrangement::getStringWidthInt (type::font (type::support), word);
+                auto r = rest.removeFromRight (w + 22);
+                g.setColour (theme.dim);
+                g.drawText (word, r.removeFromRight (w), juce::Justification::centredLeft);
+                auto sw = r.removeFromLeft (14).withSizeKeepingCentre (12, fillSwatch ? 10 : 3).toFloat();
+                g.setColour (c);
+                g.fillRoundedRectangle (sw, 1.5f);
+                rest.removeFromRight (8);
+            };
+            item ("Reduction", theme.accent2, true);
+            item ("Out", theme.accent, false);
+            item (module != nullptr && module->isKeyedFromSidechain() ? "Sidechain" : "In", theme.dim.withAlpha (0.55f), true);
+        }
+
+        // Left: what this is, or in amber what you are hearing instead of the normal output.
+        const auto warning = module != nullptr ? module->getAuditionWarning() : juce::String();
+        g.setColour (warning.isNotEmpty() ? theme.warn : theme.dim);
+        g.setFont (type::font (type::support, warning.isNotEmpty()));
+        g.drawFittedText (warning.isNotEmpty() ? warning
+                          : showLevels ? juce::String ("Last 12 seconds") : juce::String ("Gain reduction, last 12 seconds"),
+                          rest, juce::Justification::centredLeft, 1, 0.9f);
 
         auto plot = outer.reduced (2);
         g.setColour (theme.bg);
@@ -604,12 +1149,49 @@ public:
         for (int i = 1; i < 3; ++i)
             g.drawHorizontalLine (plot.getY() + plot.getHeight() * i / 3, (float) plot.getX(), (float) plot.getRight());
 
+        auto xOf = [&] (int i) { return plot.getX() + plot.getWidth() * (float) i / (float) (slots - 1); };
+
+        if (showLevels)
+        {
+            // Levels use their own scale, -60 dBFS at the bottom to 0 at the top, under the
+            // reduction, which hangs from the top on its scale as before.
+            auto yLev = [&] (float db) { return plot.getBottom() - plot.getHeight() * juce::jlimit (0.0f, 1.0f, (db + 60.0f) / 60.0f); };
+            juce::Path inArea, outLine;
+            inArea.startNewSubPath ((float) plot.getX(), (float) plot.getBottom());
+            bool started = false;
+            for (int i = 0; i < slots; ++i)
+            {
+                const int k = (head + i) % slots;
+                inArea.lineTo (xOf (i), yLev (inHist[k]));
+                if (outHist[k] > -60.0f)
+                {
+                    if (! started) { outLine.startNewSubPath (xOf (i), yLev (outHist[k])); started = true; }
+                    else outLine.lineTo (xOf (i), yLev (outHist[k]));
+                }
+                else started = false;
+            }
+            inArea.lineTo ((float) plot.getRight(), (float) plot.getBottom());
+            inArea.closeSubPath();
+            g.setColour (theme.dim.withAlpha (0.22f));
+            g.fillPath (inArea);
+            g.setColour (theme.accent.withAlpha (0.85f));
+            g.strokePath (outLine, juce::PathStrokeType (1.4f));
+
+            if (module != nullptr && module->hasTransferCurve())
+            {   // the threshold on the level scale, dotted like the curve's guide
+                const float y = yLev (juce::jlimit (-60.0f, 0.0f, module->getCurveThresholdDb()));
+                g.setColour (theme.warn.withAlpha (0.7f));
+                for (int x = plot.getX(); x < plot.getRight(); x += 8)
+                    g.fillRect ((float) x, y, 4.0f, 1.0f);
+            }
+        }
+
         juce::Path area, line;
         area.startNewSubPath ((float) plot.getX(), (float) plot.getY());
         for (int i = 0; i < slots; ++i)
         {
             const float v = juce::jmin (span, hist[(head + i) % slots]);
-            const float x = plot.getX() + plot.getWidth() * (float) i / (float) (slots - 1);
+            const float x = xOf (i);
             const float y = plot.getY() + plot.getHeight() * (v / span);
             area.lineTo (x, y);
             if (i == 0) line.startNewSubPath (x, y); else line.lineTo (x, y);
@@ -623,7 +1205,8 @@ public:
 
         g.setColour (theme.dim.withAlpha (0.8f));
         g.setFont (type::font (11.0f));
-        g.drawText ("-" + juce::String (span, 0), plot.reduced (4, 2), juce::Justification::bottomLeft);
+        g.drawText ("reduction -" + juce::String (span, 0) + " dB", plot.reduced (4, 2), juce::Justification::bottomLeft);
+        if (showLevels) g.drawText ("level 0 to -60 dB", plot.reduced (4, 2), juce::Justification::bottomRight);
         g.setColour (theme.line);
         g.drawRoundedRectangle (plot.toFloat().reduced (0.5f), 4.0f, 1.0f);
     }
@@ -631,9 +1214,11 @@ public:
 private:
     static constexpr int slots = 240;          // 240 x 50 ms = 12 seconds
     const Theme& theme;
-    std::array<float, slots> hist {};
+    const Module* module = nullptr;
+    std::array<float, slots> hist {}, inHist {}, outHist {};
     int head = 0, sinceWrite = 0;
-    float pending = 0.0f;
+    float pending = 0.0f, pendingIn = -200.0f, pendingOut = -200.0f;
+    bool showLevels = false;
 };
 
 //==============================================================================

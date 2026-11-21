@@ -80,7 +80,10 @@ struct ParamSpec
         if (type == Type::Choice) return choices[juce::jlimit (0, juce::jmax (0, choices.size() - 1), (int) std::round (v))];
         if (type == Type::Bool)   return v >= 0.5f ? "On" : "Off";
         if (unit == "Hz" && v >= 1000.0f) return juce::String (v / 1000.0f, 2) + " kHz";
-        return juce::String (v, decimals) + (unit.isNotEmpty() ? " " + unit : juce::String());
+        // juce::String (v, 0) means "as many decimals as it takes", not "none", so whole-number
+        // controls are rounded here: a dragged 161.309 Hz reads 161 Hz.
+        const auto num = decimals > 0 ? juce::String (v, decimals) : juce::String (juce::roundToInt (v));
+        return num + (unit.isNotEmpty() ? " " + unit : juce::String());
     }
     float parse (const juce::String& t) const
     {

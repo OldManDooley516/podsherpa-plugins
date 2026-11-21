@@ -5,15 +5,19 @@
 
 namespace ps
 {
-inline const char* suiteVersion() { return "0.1"; }
+/** The version in the chip, from CMakeLists.txt so the chip and what the host reports can
+    never disagree. */
+#ifndef PS_VERSION
+ #error "PS_VERSION comes from CMakeLists.txt"
+#endif
+inline const char* suiteVersion() { return PS_VERSION; }
 
 /** Wraps one module as its own VST3/AU plugin. Parameter IDs are "<module>.<param>". */
 class SinglePluginProcessor : public juce::AudioProcessor, private juce::AsyncUpdater
 {
 public:
     explicit SinglePluginProcessor (std::unique_ptr<Module> m)
-        : juce::AudioProcessor (BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
-                                                 .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
+        : juce::AudioProcessor (busesFor (*m))
     {
         module = m.get();
         const auto id = module->getModuleId();
@@ -26,9 +30,29 @@ public:
             p->bind (s, {}, s.def);
             params.push_back (p); addParameter (p);
         }
+        slot.tapSpectrum = true;
         slot.setModule (std::move (m));
     }
     Module& getModule() { return *module; }
+    ModuleSlot& getSlot() { return slot; }
+
+    /** Main stereo in and out, plus, for a module that can react to another track, a second
+        stereo input called Sidechain. In REAPER a VST3's sidechain is channels 3 and 4 of the
+        track the plugin sits on. */
+    static BusesProperties busesFor (const Module& m)
+    {
+        auto b = BusesProperties().withInput ("Input", juce::AudioChannelSet::stereo(), true)
+                                  .withOutput ("Output", juce::AudioChannelSet::stereo(), true);
+        // Active by default, as JUCE's own sidechain examples do: with nothing routed to it the
+        // plugin simply receives silence there.
+        if (m.wantsSidechain()) b = b.withInput ("Sidechain", juce::AudioChannelSet::stereo(), true);
+        return b;
+    }
+
+    /** What the spectrum display shows: 0 off, 1 output only, 2 input and output. Not a host
+        parameter (nothing to automate) but saved with the project, as the JSFX saves its
+        Spectrum switch. */
+    std::atomic<int> spectrumView { 2 };
     std::vector<HostParam*> getModuleParams() const { return params; }
 
     const juce::String getName() const override { return "PodSherpa " + module->getDisplayName(); }
@@ -57,6 +81,11 @@ public:
     bool isBusesLayoutSupported (const BusesLayout& l) const override
     {
         const auto out = l.getMainOutputChannelSet();
+        if (l.inputBuses.size() > 1)
+        {   // the sidechain may be off, mono or stereo whatever the main bus is
+            const auto sc = l.getChannelSet (true, 1);
+            if (! sc.isDisabled() && sc != juce::AudioChannelSet::mono() && sc != juce::AudioChannelSet::stereo()) return false;
+        }
         return out == l.getMainInputChannelSet() && (out == juce::AudioChannelSet::mono() || out == juce::AudioChannelSet::stereo());
     }
     void prepareToPlay (double sr, int block) override
@@ -67,9 +96,17 @@ public:
         lastIn = lastOut = -1000.0f;
     }
     void releaseResources() override {}
-    void processBlock (juce::AudioBuffer<float>& b, juce::MidiBuffer&) override
+    void processBlock (juce::AudioBuffer<float>& whole, juce::MidiBuffer&) override
     {
         juce::ScopedNoDenormals nd;
+        // With a sidechain bus the host's buffer carries both inputs; everything below works on
+        // the main bus only, and the module is shown the sidechain for this block.
+        auto b = getBusBuffer (whole, true, 0);
+        juce::AudioBuffer<float> sc;
+        if (getBusCount (true) > 1 && getBus (true, 1)->isEnabled() && getBus (true, 1)->getNumberOfChannels() > 0
+            && whole.getNumChannels() >= getChannelIndexInProcessBlockBuffer (true, 1, 0) + getBus (true, 1)->getNumberOfChannels())
+            sc = getBusBuffer (whole, true, 1);   // a caller handing over fewer channels gets no sidechain
+        module->setSidechain (sc.getNumChannels() > 0 ? &sc : nullptr);
         const auto& specs = module->getParamSpecs();
         for (size_t i = 0; i < params.size(); ++i) module->setParam ((int) i, specs[i].fromNorm (params[i]->getNorm()));
         ramp (b, lastIn, dbToGain (inGain->get()));
@@ -77,6 +114,7 @@ public:
         slot.process (b, bypass->get());
         ramp (b, lastOut, dbToGain (juce::jmin (outGain->get(), module->getMaxOutputGainDb())));
         outMeter.push (b);
+        module->setSidechain (nullptr);
         // A control that changes the module's latency (Phase, Altitude's look-ahead) is answered
         // on the message thread: telling the host from here is not safe in every host.
         if (slot.getLatency() != reported.load (std::memory_order_relaxed) || module->peekSelfChanged() != 0) triggerAsyncUpdate();
@@ -100,6 +138,7 @@ public:
         t.setProperty ("bypass", bypass->get(), nullptr);
         t.setProperty ("inGain", inGain->get(), nullptr);
         t.setProperty ("outGain", outGain->get(), nullptr);
+        if (module->hasSpectrum()) t.setProperty ("spectrum", spectrumView.load(), nullptr);
         for (auto* p : params)
         {
             juce::ValueTree c ("PARAM");
@@ -120,6 +159,7 @@ public:
         *bypass = (bool) t.getProperty ("bypass", false);
         *inGain = (float) t.getProperty ("inGain", 0.0f);
         *outGain = (float) t.getProperty ("outGain", 0.0f);
+        spectrumView.store (juce::jlimit (0, 2, (int) t.getProperty ("spectrum", 2)));
         for (auto* p : params)
         {
             const auto s = p->getSpec();
@@ -244,12 +284,20 @@ public:
         if (p.getModule().hasFrequencyResponse())
         {
             response = std::make_unique<ResponseCurve> (theme, p.getModule());
+            response->setHandleParams (p.getModuleParams());
+            if (p.getModule().hasSpectrum())
+            {
+                response->setSpectrum (&specIn.getBands(), &specOut.getBands());
+                response->setView (p.spectrumView.load());
+                response->onViewChange = [this] (int v) { proc.spectrumView.store (v); };
+            }
             addAndMakeVisible (*response);
         }
         if (p.getModule().hasTransferCurve())
         {
             curve = std::make_unique<TransferCurve> (theme, p.getModule());
-            history = std::make_unique<ReductionHistory> (theme);
+            curve->setParams (p.getModuleParams());
+            history = std::make_unique<ReductionHistory> (theme, &p.getModule());
             addAndMakeVisible (*curve);
             addAndMakeVisible (*history);
         }
@@ -264,11 +312,26 @@ public:
         extraReset.setTooltip ("Start the loudness measurement again from here.");
         extraReset.onClick = [this] { proc.getModule().resetExtraReadout(); };
         addChildComponent (extraReset);
+        // Pip's walkthrough controls (Beginner mode, presets that have one).
+        pipBack.setButtonText ("Back");
+        pipBack.onClick = [this] { tutorialStep = juce::jmax (0, tutorialStep - 1); updatePipButtons(); repaint(); };
+        pipNext.onClick = [this]
+        {
+            if (tutorialStep + 1 < tutorial.size()) ++tutorialStep;
+            else tutorialOpen = false;   // Done
+            relayoutForPip();
+        };
+        pipShow.setButtonText ("Show me how");
+        pipShow.setTooltip ("Pip walks you through setting this preset up, one step at a time.");
+        pipShow.onClick = [this] { tutorialOpen = true; tutorialStep = 0; relayoutForPip(); };
+        for (auto* b : { &pipBack, &pipNext, &pipShow }) addChildComponent (*b);
+        seenProgram = p.getCurrentProgram();
+        tutorial = p.getModule().getPipTutorial (seenProgram);
         tips.setMillisecondsBeforeTipAppears (700);
         addAndMakeVisible (tips);
 
         setSize (1120, preferredHeight());
-        startTimerHz (30);
+        startTimerHz (timerRate);
     }
 
     ~SinglePluginEditor() override { setLookAndFeel (nullptr); }
@@ -285,11 +348,18 @@ public:
         if (mode == Mode::Minimal) theme = themes::withMinimal (theme);
         lnf.setTheme (theme);
         panel.setTheme (theme);
+        // Dropdowns copy their text colour when the look-and-feel is attached and keep it, so
+        // without this a switch into Vintage left pale text on its silver dropdowns.
+        sendLookAndFeelChange();
         setSize (getWidth(), preferredHeight());   // the mode may have changed the row height
         resized();
         repaint();
     }
     void tickForShot() { timerCallback(); }
+    ResponseCurve* responseForShot() { return response.get(); }
+    TransferCurve* curveForShot() { return curve.get(); }
+    /** For ps_shot: let the timer notice a preset change, then go to walkthrough step n. */
+    void pipStepForShot (int n) { tutorial = proc.getModule().getPipTutorial (proc.getCurrentProgram()); tutorialOpen = true; relayoutForPip(); tutorialStep = juce::jlimit (0, juce::jmax (0, tutorial.size() - 1), n); updatePipButtons(); }
 
     void paint (juce::Graphics& g) override
     {
@@ -400,8 +470,7 @@ public:
         const bool hasExtra = proc.getModule().getExtraReadout().isNotEmpty();
         // Each readout gets its own row. Sharing one left the reduction bar about 130 px wide,
         // which is too short to judge depth on.
-        auto strip = inner.removeFromBottom ((reduction != nullptr ? 42 : 0) + (hasExtra ? 32 : 0)
-                                             + (reduction == nullptr && ! hasExtra ? 34 : 0));
+        auto strip = inner.removeFromBottom (stripHeight());
         if (reduction != nullptr) reduction->setBounds (strip.removeFromTop (42));
         if (history != nullptr) history->setBounds (historyArea);
         if (hasExtra)
@@ -417,8 +486,9 @@ public:
         }
         else { extraArea = {}; extraReset.setVisible (false); }
         moduleMeterArea = strip;
-        if (mode == Mode::Beginner) pipArea = inner.removeFromTop (54);
+        if (mode == Mode::Beginner) pipArea = inner.removeFromTop (pipHeight() - 4);
         else                        pipArea = {};
+        updatePipButtons();
 
         // A module with a curve gets the JSFX arrangement: the curve card on the left, the
         // controls beside it, and the reduction history across the bottom.
@@ -435,7 +505,7 @@ public:
         // the JSFX lays it out: the shape is the thing you steer by, the numbers follow.
         if (response != nullptr)
         {
-            response->setBounds (inner.removeFromTop (juce::jmin (210, inner.getHeight() / 2)));
+            response->setBounds (inner.removeFromTop (juce::jmin (230, inner.getHeight() / 2)));
             inner.removeFromTop (10);
         }
 
@@ -444,6 +514,7 @@ public:
 
 private:
     static constexpr int headerH = 74;
+    static constexpr int timerRate = 30;
     static constexpr int numVintageAccents = 5;
 
     /** Tall enough for the controls at the current mode, plus the header, the footer, the
@@ -453,11 +524,9 @@ private:
     {
         // header, footer, panel margins, then whatever the readout strip actually needs: the
         // reduction meter and the extra readout each take their own row.
-        const bool hasExtra = proc.getModule().getExtraReadout().isNotEmpty();
-        const int stripH = (reduction != nullptr ? 42 : 0) + (hasExtra ? 32 : 0)
-                         + (reduction == nullptr && ! hasExtra ? 34 : 0);
+        const int stripH = stripHeight();
         const int chrome = headerH + 34 + 16 + stripH + 32;
-        const int pip = mode == Mode::Beginner ? 58 : 0;
+        const int pip = mode == Mode::Beginner ? pipHeight() : 0;
         if (curve != nullptr)
         {
             // Tall enough for the curve card and the history, or for the controls beside the
@@ -465,8 +534,18 @@ private:
             const int body = juce::jmax (300, panel.idealHeight());
             return chrome + pip + body + 136;
         }
-        if (response != nullptr) return chrome + pip + 220 + panel.idealHeight();
+        if (response != nullptr) return chrome + pip + 240 + panel.idealHeight();
         return juce::jmax (440, chrome + pip + panel.idealHeight());
+    }
+
+    /** The readout strip under the controls. A plain module with nothing to read out keeps a
+        little breathing room there; an EQ with a graph does not need it, and on Contour it was a
+        34 px empty band at the bottom of the panel. */
+    int stripHeight() const
+    {
+        const bool hasExtra = proc.getModule().getExtraReadout().isNotEmpty();
+        return (reduction != nullptr ? 42 : 0) + (hasExtra ? 32 : 0)
+             + (reduction == nullptr && ! hasExtra && response == nullptr ? 34 : 0);
     }
 
     /** Width of the name, processor type and version chip together, so resized() knows where the
@@ -486,7 +565,16 @@ private:
     {
         if (pipArea.isEmpty()) return;
         auto r = pipArea;
-        auto badge = r.removeFromLeft (46).withSizeKeepingCentre (42, 42);
+        if (showingTutorial())
+        {   // the walkthrough sits on its own card so it reads as a guide, not a caption
+            g.setColour (theme.bg.withAlpha (0.7f));
+            g.fillRoundedRectangle (r.toFloat(), 8.0f);
+            g.setColour (theme.line);
+            g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 8.0f, 1.0f);
+            r = r.reduced (12, 10);
+        }
+        auto badge = showingTutorial() ? r.removeFromLeft (46).removeFromTop (46).withSizeKeepingCentre (42, 42)
+                                       : r.removeFromLeft (46).withSizeKeepingCentre (42, 42);
 
         g.setColour (theme.panelHi);
         g.fillEllipse (badge.toFloat());
@@ -506,12 +594,57 @@ private:
         g.fillPath (m);
 
         r.removeFromLeft (10);
+        if (showingTutorial())
+        {
+            // One step at a time: the step, then a row with where you are and Back / Next.
+            auto row = r.removeFromBottom (30);
+            g.setColour (theme.dim);
+            g.setFont (type::font (type::support));
+            g.drawText ("Pip's guide to " + proc.getProgramName (seenProgram) + "  ·  step " + juce::String (tutorialStep + 1)
+                        + " of " + juce::String (tutorial.size()), row, juce::Justification::centredLeft);
+            g.setColour (theme.text);
+            g.setFont (type::font (type::label));
+            g.drawFittedText (tutorial[tutorialStep], r.withTrimmedRight (8).withTrimmedTop (2), juce::Justification::topLeft, 3, 0.95f);
+            return;
+        }
+        if (pipShow.isVisible()) r.removeFromRight (pipShow.getWidth() + 12);
         g.setColour (theme.text);
         g.setFont (type::font (type::label));
         g.drawFittedText (proc.getModule().getSubtitle().isNotEmpty()
                               ? "Pip says: " + plainIntro()
                               : juce::String ("Pip says: start with a preset, then nudge one control at a time."),
                           r, juce::Justification::centredLeft, 2);
+    }
+
+    bool showingTutorial() const { return mode == Mode::Beginner && tutorialOpen && ! tutorial.isEmpty(); }
+    /** Pip's strip: one line normally, three lines plus a button row during a walkthrough. */
+    int pipHeight() const { return showingTutorial() ? 122 : 58; }
+
+    void updatePipButtons()
+    {
+        const bool walk = showingTutorial();
+        const bool offer = mode == Mode::Beginner && ! walk && ! tutorial.isEmpty();
+        pipBack.setVisible (walk);
+        pipNext.setVisible (walk);
+        pipShow.setVisible (offer);
+        if (walk)
+        {
+            pipBack.setEnabled (tutorialStep > 0);
+            pipNext.setButtonText (tutorialStep + 1 < tutorial.size() ? "Next" : "Done");
+            auto row = pipArea.reduced (12, 10).withTrimmedLeft (56).removeFromBottom (30);
+            pipNext.setBounds (row.removeFromRight (96).withSizeKeepingCentre (96, 28));
+            row.removeFromRight (8);
+            pipBack.setBounds (row.removeFromRight (96).withSizeKeepingCentre (96, 28));
+        }
+        if (offer) { auto a = pipArea; pipShow.setBounds (a.removeFromRight (150).withSizeKeepingCentre (150, 30)); }
+    }
+
+    /** The walkthrough changes Pip's height, so the window grows or shrinks with it. */
+    void relayoutForPip()
+    {
+        setSize (getWidth(), preferredHeight());
+        resized();
+        repaint();
     }
 
     juce::String plainIntro() const
@@ -544,6 +677,9 @@ private:
         }
         lnf.setTheme (theme);
         panel.setTheme (theme);
+        // Dropdowns copy their text colour when the look-and-feel is attached and keep it, so
+        // without this a switch into Vintage left pale text on its silver dropdowns.
+        sendLookAndFeelChange();
     }
 
     void timerCallback() override
@@ -559,14 +695,37 @@ private:
             if (! vintage) lookPill.setLook (SuiteSettings::get().look());
             pullSuiteLook();
         }
+        // A preset with a walkthrough opens Pip's guide when it is picked (in any mode; it shows
+        // in Beginner). Picking another preset closes it.
+        if (const int prog = proc.getCurrentProgram(); prog != seenProgram)
+        {
+            seenProgram = prog;
+            tutorial = proc.getModule().getPipTutorial (prog);
+            tutorialOpen = ! tutorial.isEmpty();
+            tutorialStep = 0;
+            relayoutForPip();
+        }
         power.setBypassed (proc.bypass->get());
         inMeterBar.tick();
         outMeterBar.tick();
         moduleMeter = proc.getModule().readModuleMeter();
         if (reduction != nullptr) reduction->push (moduleMeter);
-        if (history != nullptr) history->push (moduleMeter);
+        float levelIn = -200.0f, levelOut = -200.0f;
+        if (curve != nullptr && proc.getModule().readCurveLevels (levelIn, levelOut)) curve->pushLevel (levelIn);
+        if (history != nullptr) history->push (moduleMeter, levelIn, levelOut);
         if (curve != nullptr) curve->repaint();   // the curve follows the controls as they move
-        if (response != nullptr) response->repaint();
+        if (response != nullptr)
+        {
+            if (proc.getModule().hasSpectrum())
+            {
+                auto& slot = proc.getSlot();
+                const int view = proc.spectrumView.load();
+                if (view != response->getView()) response->setView (view);   // a project was loaded
+                if (view == 2) specIn.update (slot.preTap, slot.getSampleRate(), timerRate);
+                if (view >= 1) specOut.update (slot.postTap, slot.getSampleRate(), timerRate);
+            }
+            response->repaint();
+        }
         repaint();
     }
 
@@ -585,6 +744,7 @@ private:
     juce::SliderParameterAttachment inAtt, outAtt;
     juce::TooltipWindow tips { this };
     std::unique_ptr<ResponseCurve> response;
+    SpectrumAnalyser specIn, specOut;
     std::unique_ptr<TransferCurve> curve;
     std::unique_ptr<ReductionHistory> history;
     std::unique_ptr<ReductionMeter> reduction;
@@ -595,6 +755,10 @@ private:
     bool vintage = false;
     int customAccent = -1;
     int seenRevision = SuiteSettings::get().getRevision();
+    juce::TextButton pipBack, pipNext, pipShow;
+    juce::StringArray tutorial;
+    int seenProgram = 0, tutorialStep = 0;
+    bool tutorialOpen = false;
 };
 
 inline juce::AudioProcessorEditor* SinglePluginProcessor::createEditor() { return new SinglePluginEditor (*this); }

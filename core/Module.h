@@ -57,9 +57,49 @@ public:
     virtual bool hasFrequencyResponse() const { return false; }
     virtual float responseDbAt (float) const { return 0.0f; }
 
+    /** Dots on the response curve that can be grabbed: each names the parameters it moves.
+        Sideways moves freq, up and down moves gain, the wheel moves q; -1 where a band has no
+        such control (the high-pass has no gain). Dragging a band that is off turns it on. */
+    struct CurveHandle { juce::String name, shortName; int freq = -1, gain = -1, q = -1, on = -1; };
+    virtual std::vector<CurveHandle> getCurveHandles() const { return {}; }
+    /** A choice parameter whose value is 0 for off, or handle index + 1 to hear only that
+        handle's band (Solo). The curve sets it while a dot is Alt/Option-dragged. -1: none. */
+    virtual int getSoloParam() const { return -1; }
+    /** When the module is playing something other than its normal output (a solo, a delta),
+        a sentence saying so. The editor shows it in amber; empty when nothing is auditioned. */
+    virtual juce::String getAuditionWarning() const { return {}; }
+
+    /** A module that wants a spectrum display behind its curve. The slot then keeps the latest
+        8192 samples going in and coming out (SpectrumTap) and the editor draws both. Only the
+        copy happens on the audio thread; the FFT runs in the editor. */
+    virtual bool hasSpectrum() const { return false; }
+
     virtual bool hasTransferCurve() const { return false; }
     virtual float curveOutputDb (float inputDb) const { return inputDb; }
     virtual float getCurveThresholdDb() const { return -60.0f; }
+    /** The level the module's own detector saw, and the level that came out, both in dBFS and
+        both the loudest since the last read (reading clears them). The editor puts a dot on the
+        curve at the input level and draws both as traces behind the reduction history, so you
+        can see whether the voice is reaching the threshold at all. False: nothing to show. */
+    virtual bool readCurveLevels (float& /*inDb*/, float& /*outDb*/) { return false; }
+    /** Parameters the curve's threshold dot moves: sideways sets the first (threshold, dB),
+        up and down the second (ratio). -1 where a module has no such control. */
+    virtual int getCurveThresholdParam() const { return -1; }
+    virtual int getCurveRatioParam() const { return -1; }
+
+    /** Sidechain (Nov 21). A module that can react to another track says so, and the standalone
+        plugin then offers a second, optional stereo input. Before each block the wrapper points
+        the module at that input (or at nothing, when the host gives none or inside Basecamp,
+        which is single-track) and clears the pointer afterwards. Same length as the block. */
+    virtual bool wantsSidechain() const { return false; }
+    void setSidechain (const juce::AudioBuffer<float>* sc) { sidechain = sc; }
+    /** True while the module is reacting to the sidechain rather than its own input, so the
+        displays call the level they show "Sidechain" instead of "Voice". */
+    virtual bool isKeyedFromSidechain() const { return false; }
+
+    /** Pip's walkthrough for a factory preset: one short step per entry, shown one at a time in
+        Beginner mode when that preset is picked. Empty: no walkthrough, Pip's usual line. */
+    virtual juce::StringArray getPipTutorial (int /*presetIndex*/) const { return {}; }
 
     virtual juce::String getExtraReadout() const { return {}; }
     virtual bool extraReadoutIsGood() const { return true; }
@@ -100,6 +140,9 @@ public:
     int getNumParams() const { return (int) specs.size(); }
     void setParam (int i, float v) { values[(size_t) i].store (v, std::memory_order_relaxed); }
     float getParam (int i) const { return values[(size_t) i].load (std::memory_order_relaxed); }
+
+protected:
+    const juce::AudioBuffer<float>* sidechain = nullptr;
 
 private:
     std::vector<ParamSpec> specs;

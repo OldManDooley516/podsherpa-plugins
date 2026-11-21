@@ -34,14 +34,12 @@ jobs:
         shell: bash
         run: cmake --build build --config Release --parallel 4
 
+      # ctest finds the test program itself, so this no longer depends on where the generator
+      # puts it (the Nov 21 Windows run on the VS 2026 image failed here with exit code 127 in
+      # under a second, before any test ran). --output-on-failure prints the checks if one fails.
       - name: Run tests
         shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            ./build/ps_tests_artefacts/Release/ps_tests
-          else
-            ./build/ps_tests_artefacts/Release/ps_tests.exe
-          fi
+        run: ctest --test-dir build -C Release --output-on-failure
 
       - name: Package
         shell: bash

@@ -181,17 +181,39 @@ public:
     }
 
     int knobCell() const { return mode == Mode::Minimal ? 78 : 92; }
+    int toggleCell() const { return 44; }   // an On button needs a button's height, not a knob's
     int headerH() const { return 26; }
+
+    /** Height of the band of columns. On/off switches go to the bottom of every column, on one
+        shared line, so they read as a row (Contour's sat at three different heights because the
+        high-pass and shelf have fewer knobs than the bells). */
+    int columnsHeight() const
+    {
+        int knobs = 0, toggles = 0;
+        for (auto& g : groups)
+        {
+            int k = 0, t = 0;
+            for (auto* r : g->rows) (r->spec.type == ParamSpec::Type::Bool ? t : k)++;
+            knobs = juce::jmax (knobs, k); toggles = juce::jmax (toggles, t);
+        }
+        return headerH() + knobs * knobCell() + toggles * toggleCell() + 14;
+    }
+
+    /** Under a band of columns, two or three short switch rows (Contour's Phase, Solo and
+        Delta) share one line rather than taking one each, outside Beginner, where each needs
+        its sentence underneath. */
+    bool plainTwoUp() const
+    {
+        if (groups.empty() || mode == Mode::Beginner || plain.size() < 2 || plain.size() > 3 || (getWidth() > 0 && getWidth() < 700)) return false;
+        for (auto* r : plain) if (r->spec.type != ParamSpec::Type::Choice && r->spec.type != ParamSpec::Type::Bool) return false;
+        return true;
+    }
 
     int idealHeight() const
     {
-        int h = (int) plain.size() * rowHeight() + 8;
-        if (! groups.empty())
-        {
-            int deepest = 0;
-            for (auto& g : groups) deepest = juce::jmax (deepest, (int) g->rows.size());
-            h += headerH() + deepest * knobCell() + 14;
-        }
+        const int plainRows = plainTwoUp() ? 1 : (int) plain.size();
+        int h = plainRows * rowHeight() + 8;
+        if (! groups.empty()) h += columnsHeight();
         return h;
     }
 
@@ -213,23 +235,26 @@ public:
         // Grouped sections first, as columns across the top.
         if (! groups.empty())
         {
-            int deepest = 0;
-            for (auto& g : groups) deepest = juce::jmax (deepest, (int) g->rows.size());
-            auto band = r.removeFromTop (headerH() + deepest * knobCell() + 14);
+            auto band = r.removeFromTop (columnsHeight());
             const int colW = band.getWidth() / (int) groups.size();
             for (size_t gi = 0; gi < groups.size(); ++gi)
             {
                 auto col = band.removeFromLeft (gi + 1 == groups.size() ? band.getWidth() : colW).reduced (4, 0);
                 groups[gi]->header.setBounds (col.removeFromTop (headerH()));
+                col.removeFromBottom (14);
+                // Switches from the bottom up, in reverse so the first stays on top.
+                for (auto it = groups[gi]->rows.rbegin(); it != groups[gi]->rows.rend(); ++it)
+                    if ((*it)->spec.type == ParamSpec::Type::Bool)
+                    {
+                        auto cell = col.removeFromBottom (toggleCell());
+                        (*it)->label.setBounds ({});
+                        (*it)->toggle.setBounds (cell.withSizeKeepingCentre (juce::jmin (120, cell.getWidth() - 20), 32));
+                    }
                 for (auto* row : groups[gi]->rows)
                 {
+                    if (row->spec.type == ParamSpec::Type::Bool) continue;
                     auto cell = col.removeFromTop (knobCell());
-                    if (row->spec.type == ParamSpec::Type::Bool)
-                    {
-                        row->label.setBounds ({});
-                        row->toggle.setBounds (cell.withSizeKeepingCentre (juce::jmin (120, cell.getWidth() - 20), 32));
-                    }
-                    else if (row->spec.type == ParamSpec::Type::Choice)
+                    if (row->spec.type == ParamSpec::Type::Choice)
                     {
                         row->label.setBounds (cell.removeFromTop (18));
                         row->combo.setBounds (cell.reduced (6, 6).withHeight (30));
@@ -244,9 +269,31 @@ public:
             r.removeFromTop (6);
         }
 
-        for (auto& row : plain)
+        const bool twoUp = plainTwoUp();
+        juce::Rectangle<int> pairLine;
+        for (size_t pi = 0; pi < plain.size(); ++pi)
         {
-            auto line = r.removeFromTop (rh).reduced (0, mode == Mode::Minimal ? 4 : 6);
+            auto* row = plain[pi];
+            juce::Rectangle<int> line;
+            if (twoUp)
+            {
+                const int n = (int) plain.size();
+                if (pi == 0) pairLine = r.removeFromTop (rh).reduced (0, mode == Mode::Minimal ? 4 : 6);
+                const int share = (pairLine.getWidth() + 24) / (n - (int) pi);
+                line = (pi + 1 == plain.size() ? pairLine : pairLine.removeFromLeft (share - 24));
+                if (pi + 1 < plain.size()) pairLine.removeFromLeft (24);
+                const int nw = juce::jmin (row->spec.type == ParamSpec::Type::Bool ? 70 : 90, line.getWidth() / 3);
+                row->label.setBounds (line.removeFromLeft (nw));
+                if (row->spec.type == ParamSpec::Type::Bool)
+                    row->toggle.setBounds (line.removeFromLeft (96).withSizeKeepingCentre (96, 32));
+                else
+                {
+                    const int cw = juce::jmin (260, line.getWidth());
+                    row->combo.setBounds (line.removeFromLeft (cw).withSizeKeepingCentre (cw, 34));
+                }
+                continue;
+            }
+            line = r.removeFromTop (rh).reduced (0, mode == Mode::Minimal ? 4 : 6);
             auto names = line.removeFromLeft (nameW);
             if (mode == Mode::Beginner && row->spec.hint.isNotEmpty())
             {

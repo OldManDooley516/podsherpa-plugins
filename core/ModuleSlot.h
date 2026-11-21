@@ -1,6 +1,7 @@
 #pragma once
 #include "Module.h"
 #include "Meters.h"
+#include "Spectrum.h"
 
 namespace ps
 {
@@ -30,6 +31,8 @@ public:
         if (! module) return;
         const int n = buffer.getNumSamples(), nc = juce::jmin (buffer.getNumChannels(), numChannels);
         inMeter.push (buffer);
+        const bool spectrum = tapSpectrum && module->hasSpectrum();
+        if (spectrum) preTap.push (buffer, nc);
 
         // A module may change its latency between blocks: a phase switch, a look-ahead time.
         // The delay line is already as long as the module can ever ask for, so nothing allocates
@@ -67,9 +70,15 @@ public:
                 }
             }
         outMeter.push (buffer);
+        if (spectrum) postTap.push (buffer, nc);
     }
 
     LevelMeter inMeter, outMeter;
+    /** What goes into the module and what comes out of it, for a spectrum display. The
+        output side includes bypass, so a bypassed EQ shows the two lying on top of each other. */
+    SpectrumTap preTap, postTap;
+    bool tapSpectrum = false;   // set by a host that draws one; Basecamp's rack does not yet
+    double getSampleRate() const { return sampleRate; }
 
 private:
     void prepareModule()
