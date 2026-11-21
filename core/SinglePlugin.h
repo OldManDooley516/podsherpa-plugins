@@ -301,6 +301,9 @@ public:
         if (mode == Mode::Minimal) theme = themes::withMinimal (theme);
         lnf.setTheme (theme);
         panel.setTheme (theme);
+        // Dropdowns copy their text colour when the look-and-feel is attached and keep it, so
+        // without this a switch into Vintage left pale text on its silver dropdowns.
+        sendLookAndFeelChange();
         setSize (getWidth(), preferredHeight());   // the mode may have changed the row height
         resized();
         repaint();
@@ -417,8 +420,7 @@ public:
         const bool hasExtra = proc.getModule().getExtraReadout().isNotEmpty();
         // Each readout gets its own row. Sharing one left the reduction bar about 130 px wide,
         // which is too short to judge depth on.
-        auto strip = inner.removeFromBottom ((reduction != nullptr ? 42 : 0) + (hasExtra ? 32 : 0)
-                                             + (reduction == nullptr && ! hasExtra ? 34 : 0));
+        auto strip = inner.removeFromBottom (stripHeight());
         if (reduction != nullptr) reduction->setBounds (strip.removeFromTop (42));
         if (history != nullptr) history->setBounds (historyArea);
         if (hasExtra)
@@ -471,9 +473,7 @@ private:
     {
         // header, footer, panel margins, then whatever the readout strip actually needs: the
         // reduction meter and the extra readout each take their own row.
-        const bool hasExtra = proc.getModule().getExtraReadout().isNotEmpty();
-        const int stripH = (reduction != nullptr ? 42 : 0) + (hasExtra ? 32 : 0)
-                         + (reduction == nullptr && ! hasExtra ? 34 : 0);
+        const int stripH = stripHeight();
         const int chrome = headerH + 34 + 16 + stripH + 32;
         const int pip = mode == Mode::Beginner ? 58 : 0;
         if (curve != nullptr)
@@ -485,6 +485,16 @@ private:
         }
         if (response != nullptr) return chrome + pip + 240 + panel.idealHeight();
         return juce::jmax (440, chrome + pip + panel.idealHeight());
+    }
+
+    /** The readout strip under the controls. A plain module with nothing to read out keeps a
+        little breathing room there; an EQ with a graph does not need it, and on Contour it was a
+        34 px empty band at the bottom of the panel. */
+    int stripHeight() const
+    {
+        const bool hasExtra = proc.getModule().getExtraReadout().isNotEmpty();
+        return (reduction != nullptr ? 42 : 0) + (hasExtra ? 32 : 0)
+             + (reduction == nullptr && ! hasExtra && response == nullptr ? 34 : 0);
     }
 
     /** Width of the name, processor type and version chip together, so resized() knows where the
@@ -562,6 +572,9 @@ private:
         }
         lnf.setTheme (theme);
         panel.setTheme (theme);
+        // Dropdowns copy their text colour when the look-and-feel is attached and keep it, so
+        // without this a switch into Vintage left pale text on its silver dropdowns.
+        sendLookAndFeelChange();
     }
 
     void timerCallback() override
