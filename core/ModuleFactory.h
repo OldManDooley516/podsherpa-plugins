@@ -4,6 +4,7 @@
 #include "../modules/Contour.h"
 #include "../modules/ContourDynamic.h"
 #include "../modules/Dropoff.h"
+#include "../modules/Glade.h"
 #include "../modules/Gust.h"
 #include "../modules/Ridgeline.h"
 #include "../modules/Scree.h"
@@ -25,6 +26,7 @@ inline const std::vector<ModuleInfo>& moduleRegistry()
         { "contour", "Contour", [] { return std::unique_ptr<Module> (new Contour()); } },
         { "contourdynamic", "Contour Dynamic", [] { return std::unique_ptr<Module> (new ContourDynamic()); } },
         { "dropoff", "Dropoff", [] { return std::unique_ptr<Module> (new Dropoff()); } },
+        { "glade", "Glade", [] { return std::unique_ptr<Module> (new Glade()); } },
         { "gust", "Gust", [] { return std::unique_ptr<Module> (new Gust()); } },
         { "ridgeline", "Ridgeline", [] { return std::unique_ptr<Module> (new Ridgeline()); } },
         { "scree", "Scree", [] { return std::unique_ptr<Module> (new Scree()); } },

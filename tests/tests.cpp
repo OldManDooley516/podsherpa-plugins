@@ -325,6 +325,74 @@ int main (int argc, char** argv)
         check (std::abs (10.0 * std::log10 (eb / ea)) < 0.05, "with Range at 0 the crossover adds back up flat");
     }
 
+    std::cout << "Glade" << std::endl;
+    {
+        auto rmsDb = [] (const juce::AudioBuffer<float>& b, int from, int to)
+        {
+            double e = 0.0; for (int i = from; i < to; ++i) e += b.getSample (0, i) * b.getSample (0, i);
+            return 10.0 * std::log10 (juce::jmax (1.0e-20, e / juce::jmax (1, to - from)));
+        };
+        Glade g; g.prepare (sr, block, 2);
+        const int la = g.getLatencySamples();
+        juce::AudioBuffer<float> imp (2, 4000); imp.clear(); imp.setSample (0, 100, 0.5f); imp.setSample (1, 100, 0.5f);
+        runBlocks (imp, block, [&] (auto& v) { g.process (v); });
+        check (la == (int) std::round (0.020 * sr) && firstNonZero (imp) - 100 == la, "look-ahead is 20 ms and the reported latency matches the delay (" + juce::String (la) + " samples)");
+
+        // A voice-level tone well over the threshold comes out untouched, just delayed.
+        g.reset();
+        auto loud = sine (sr, 24000, 300.0, 0.14f), loudIn = loud;   // about -20 dBFS RMS
+        runBlocks (loud, block, [&] (auto& v) { g.process (v); });
+        float worst = 0.0f;
+        for (int i = 4000; i < 24000; ++i) worst = juce::jmax (worst, std::abs (loud.getSample (0, i) - loudIn.getSample (0, i - la)));
+        check (worst < 1.0e-6f, "speech-level audio passes unchanged (largest difference " + juce::String (worst, 9) + ")");
+
+        // Room tone far under it is turned down by Range and no more.
+        for (float range : { 6.0f, 12.0f })
+        {
+            Glade q; q.prepare (sr, block, 2); q.setParam (Glade::pRange, range);
+            auto quiet = sine (sr, 96000, 300.0, 0.0014f), quietIn = quiet;   // about -60 dBFS, 2 s so Close has settled
+            runBlocks (quiet, block, [&] (auto& v) { q.process (v); });
+            const double cut = rmsDb (quietIn, 60000, 95000) - rmsDb (quiet, 60000 + la, 95000 + la);
+            check (std::abs (cut - range) < 0.1, "a -60 dB pause is turned down by Range " + juce::String (range, 0) + " (measured " + juce::String (cut, 2) + " dB)");
+        }
+
+        // Look-ahead: a word starting out of silence is already open when it begins.
+        {
+            Glade q; q.prepare (sr, block, 2);
+            juce::AudioBuffer<float> b (2, 48000); b.clear();
+            auto word = sine (sr, 24000, 300.0, 0.05f);   // a soft onset, about -29 dBFS
+            for (int c = 0; c < 2; ++c) b.copyFrom (c, 24000, word, c, 0, 24000);
+            auto in = b;
+            runBlocks (b, block, [&] (auto& v) { q.process (v); });
+            const double first2ms = rmsDb (b, 24000 + la, 24000 + la + 96) - rmsDb (in, 24000, 24096);
+            check (first2ms > -1.0, "the first 2 ms of a word after silence lose under 1 dB (" + juce::String (first2ms, 2) + " dB)");
+        }
+
+        // Hold: a quiet word ending just after the voice drops is left alone, then the pause settles.
+        {
+            Glade q; q.prepare (sr, block, 2);
+            auto b = sine (sr, 72000, 300.0, 0.14f);
+            for (int c = 0; c < 2; ++c) b.applyGain (c, 24000, 48000, 0.025f);   // drops 32 dB, under the threshold
+            auto in = b;
+            runBlocks (b, block, [&] (auto& v) { q.process (v); });
+            const double tail = rmsDb (b, 24000 + la + 480, 24000 + la + 3840) - rmsDb (in, 24480, 27840);
+            const double later = rmsDb (b, 60000 + la, 71000 + la) - rmsDb (in, 60000, 71000);
+            check (tail > -0.5, "the 70 ms after the voice drops are held open (" + juce::String (tail, 2) + " dB)");
+            check (later < -5.5, "after Hold and Close the pause has settled near Range (" + juce::String (later, 2) + " dB)");
+        }
+
+        // Delta plays what is taken off: nothing on speech, and the curve agrees with the audio.
+        {
+            Glade q; q.prepare (sr, block, 2); q.setParam (Glade::pDelta, 1.0f);
+            auto b = sine (sr, 24000, 300.0, 0.14f);
+            runBlocks (b, block, [&] (auto& v) { q.process (v); });
+            check (rmsDb (b, 6000, 24000) < -100.0, "Delta on speech-level audio is silent (nothing is taken off)");
+            check (std::abs (q.curveOutputDb (-20.0f) + 20.0f) < 1.0e-4f && std::abs (q.curveOutputDb (-60.0f) + 66.0f) < 1.0e-3f,
+                   "the drawn curve: -20 dB in stays -20, -60 dB in comes out at -66 (Range 6)");
+            check (q.getCurveTitle() == "Expander curve", "the curve card is titled as an expander");
+        }
+    }
+
     std::cout << "Serac" << std::endl;
     {
         auto reduction = [&] (Serac& s, double freq, float amp, int samples = 24000)
